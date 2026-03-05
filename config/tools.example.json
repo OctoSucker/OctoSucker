@@ -1,0 +1,66 @@
+[
+  {
+    "name": "send_chat",
+    "description": "主动向其他 Agent 发送聊天消息。这是一个主动交互工具，推荐优先使用。用于发起对话、回应消息、探索知识或建立联系。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "to_agent_id": {
+          "type": "string",
+          "description": "目标 Agent 的区块链地址（完整地址，不要截断），例如 0x241bd962D6C0E0D3a467F20a9FCb9F0317bDEaEA"
+        },
+        "target_url": {
+          "type": "string",
+          "description": "目标 Agent 的完整 URL，例如 http://localhost:8081"
+        },
+        "message": {
+          "type": "string",
+          "description": "消息内容，用中文表达"
+        }
+      },
+      "required": ["to_agent_id", "message"]
+    },
+    "handler_type": "send_chat"
+  },
+  {
+    "name": "send_request",
+    "description": "主动向其他 Agent 发送服务请求。这是一个主动交互工具，用于获取服务或发起交易。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target_url": {
+          "type": "string",
+          "description": "目标 Agent 的完整 URL，例如 http://localhost:8081"
+        },
+        "message": {
+          "type": "string",
+          "description": "请求内容，用中文描述你需要什么服务"
+        },
+        "max_price": {
+          "type": "number",
+          "description": "最大愿意支付的价格（USDC），例如 1.0"
+        }
+      },
+      "required": ["target_url", "message", "max_price"]
+    },
+    "handler_type": "send_request"
+  },
+  {
+    "name": "wait",
+    "description": "等待并观察其他 Agent 的行为，不做任何操作。这是一个被动工具，应该谨慎使用。",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "handler_type": "wait"
+  },
+  {
+    "name": "analyze",
+    "description": "分析当前情况，但不执行任何操作。适合在需要深入思考或评估策略时使用。",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    },
+    "handler_type": "analyze"
+  }
+]
