@@ -4,27 +4,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-
-	"github.com/google-agentic-commerce/a2a-x402/core/types"
 )
 
-// AgentConfig 包含 Agent 的完整配置
 type AgentConfig struct {
-	Port string `json:"port"` // 服务端口，如 ":8080"
+	LLM *LLMConfig `json:"llm,omitempty"`
 
-	Merchant        *Merchant              `json:"merchant"`
-	NetworkKeyPairs []types.NetworkKeyPair `json:"networkKeyPairs"`
-	LLM             *LLMConfig             `json:"llm,omitempty"`
-	Personality     string                 `json:"personality,omitempty"`       // Agent 性格
-	ToolsConfigPath string                 `json:"tools_config_path,omitempty"` // 工具配置文件路径，如 "config/tools.json" 或 "config/tools/"
+	// Skill 配置（可选）
+	Telegram *TelegramConfig `json:"telegram,omitempty"` // Telegram Skill 配置
 }
 
-type Merchant struct {
-	Name           string                `json:"name"`
-	Description    string                `json:"description"`
-	URL            string                `json:"url"`            // Agent 的完整 URL，如 "http://localhost:8080"
-	FacilitatorURL string                `json:"facilitatorURL"` // Facilitator URL
-	NetworkConfigs []types.NetworkConfig `json:"networkConfigs"`
+// TelegramConfig Telegram Skill 配置
+type TelegramConfig struct {
+	BotToken        string  `json:"bot_token"`                   // Bot Token（必需）
+	DMPolicy        string  `json:"dm_policy,omitempty"`         // DM 策略：disabled, open, allowlist, pairing
+	GroupPolicy     string  `json:"group_policy,omitempty"`      // 群组策略：disabled, allowlist, open
+	RequireMention  bool    `json:"require_mention,omitempty"`   // 是否需要在群组中 @mention bot
+	AllowedChatIDs  []int64 `json:"allowed_chat_ids,omitempty"`  // 允许的聊天 ID 列表
+	AllowedUserIDs  []int64 `json:"allowed_user_ids,omitempty"`  // 允许的用户 ID 列表
+	MaxMessageStore int     `json:"max_message_store,omitempty"` // 最大消息存储数量
 }
 
 // LLMConfig LLM 配置

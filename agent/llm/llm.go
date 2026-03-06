@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -22,6 +23,7 @@ func NewLLMClient(baseURL, apiKey, model string) *LLMClient {
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
 	)
+	log.Printf("LLM client created: BaseURL=%s, Model=%s", baseURL, model)
 	return &LLMClient{
 		Client: client,
 		model:  model,
@@ -68,12 +70,20 @@ func (c *LLMClient) ChatCompletionWithTools(
 			var toolParam openai.ChatCompletionToolParam
 			if err := json.Unmarshal(toolBytes, &toolParam); err == nil {
 				toolParams = append(toolParams, toolParam)
+			} else {
+				log.Printf("LLM: failed to unmarshal tool param: %v, tool: %s", err, string(toolBytes))
 			}
 		}
 		if len(toolParams) > 0 {
 			params.Tools = toolParams
+			log.Printf("LLM: sending request with %d tools", len(toolParams))
 		}
 	}
+
+	// 打印消息历史用于调试
+	log.Printf("LLM: sending %d messages to API", len(messages))
+	// 注意：ChatCompletionMessageParamUnion 是联合类型，不能直接类型断言
+	// 这里只打印消息数量，详细内容在 API 调用时由 SDK 处理
 
 	chatCompletion, err := c.Client.Chat.Completions.New(ctx, params)
 	if err != nil {
