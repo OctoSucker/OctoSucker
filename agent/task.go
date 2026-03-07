@@ -30,14 +30,14 @@ func (a *Agent) SubmitTask(input string) error {
 	log.Printf("SubmitTask: received task - id=%s, input=%s", taskID, input)
 
 	// 提交任务到队列
-	a.SubmitTaskToQueue(task)
+	a.submitTaskToQueue(task)
 
 	log.Printf("SubmitTask: task submitted successfully - id=%s", taskID)
 	return nil
 }
 
-// SubmitTaskToQueue 提交任务到队列（内部方法）
-func (a *Agent) SubmitTaskToQueue(task *Task) {
+// submitTaskToQueue 提交任务到队列（内部方法）
+func (a *Agent) submitTaskToQueue(task *Task) {
 	select {
 	case a.taskQueue <- task:
 		log.Printf("Task queue: current length=%d", len(a.taskQueue))

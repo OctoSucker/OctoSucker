@@ -11,6 +11,18 @@ type AgentConfig struct {
 
 	// Skill 配置（可选）
 	Telegram *TelegramConfig `json:"telegram,omitempty"` // Telegram Skill 配置
+	Fs       *FsConfig      `json:"fs,omitempty"`       // 文件系统 Skill 配置
+	Web      *WebConfig     `json:"web,omitempty"`      // Web Skill 配置
+}
+
+// WebConfig Web Skill 配置（浏览器自动化 + HTTP 抓取，无 Brave/Serper）
+type WebConfig struct {
+	FetchMaxChars int `json:"fetch_max_chars,omitempty"` // HTTP 抓取与 extract 最大字符数，默认 50000
+}
+
+// FsConfig 文件系统 Skill 配置
+type FsConfig struct {
+	WorkspaceDirs []string `json:"workspace_dirs,omitempty"` // 允许访问的根目录列表（相对或绝对路径）
 }
 
 // TelegramConfig Telegram Skill 配置
