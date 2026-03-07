@@ -31,5 +31,23 @@ func buildSkillConfigsFromAgentConfig(cfg *config.AgentConfig) map[string]map[st
 		skillConfigs["github.com/OctoSucker/skill-telegram"] = telegramConfig
 	}
 
+	// 文件系统 Skill 配置
+	if cfg.Fs != nil && len(cfg.Fs.WorkspaceDirs) > 0 {
+		fsConfig := make(map[string]interface{})
+		dirs := make([]interface{}, len(cfg.Fs.WorkspaceDirs))
+		for i, d := range cfg.Fs.WorkspaceDirs {
+			dirs[i] = d
+		}
+		fsConfig["workspace_dirs"] = dirs
+		skillConfigs["github.com/OctoSucker/skill-fs"] = fsConfig
+	}
+
+	// Web Skill 配置
+	if cfg.Web != nil && cfg.Web.FetchMaxChars > 0 {
+		skillConfigs["github.com/OctoSucker/skill-web"] = map[string]interface{}{
+			"fetch_max_chars": cfg.Web.FetchMaxChars,
+		}
+	}
+
 	return skillConfigs
 }

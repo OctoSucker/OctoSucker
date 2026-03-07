@@ -23,7 +23,6 @@ func NewLLMClient(baseURL, apiKey, model string) *LLMClient {
 		option.WithAPIKey(apiKey),
 		option.WithBaseURL(baseURL),
 	)
-	log.Printf("LLM client created: BaseURL=%s, Model=%s", baseURL, model)
 	return &LLMClient{
 		Client: client,
 		model:  model,

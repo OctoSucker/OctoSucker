@@ -7,7 +7,9 @@ import (
 
 	"github.com/OctoSucker/octosucker/agent"
 
+	_ "github.com/OctoSucker/skill-fs"
 	_ "github.com/OctoSucker/skill-telegram"
+	_ "github.com/OctoSucker/skill-web"
 )
 
 // skill_imports.go 会自动生成在这里
