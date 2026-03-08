@@ -49,6 +49,14 @@ func (a *Agent) runReActLoop(ctx context.Context, task *Task) {
 	// ReAct 循环：持续推理-行动-观察，直到任务完成
 	iterations := 0
 	for iterations < a.maxReActIterations {
+		// 每轮开始时检查 context 取消，便于超时或关闭时及时退出
+		select {
+		case <-ctx.Done():
+			log.Printf("ReAct loop cancelled for task %s: %v", task.ID, ctx.Err())
+			return
+		default:
+		}
+
 		iterations++
 
 		// 1. Reasoning: LLM 推理下一步行动
