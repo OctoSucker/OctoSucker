@@ -28,6 +28,7 @@ type Agent struct {
 
 	// ReAct 循环配置
 	maxReActIterations int           // 最大 ReAct 迭代次数（防止无限循环）
+	taskTimeout        time.Duration // 单任务超时，0 表示不限制
 	maxSessionAge      time.Duration // 会话最大存活时间
 
 	// 配置管理
@@ -44,14 +45,26 @@ func NewAgent(
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	maxIter := 20
+	taskTimeout := time.Duration(0)
+	if cfg.Agent != nil {
+		if cfg.Agent.MaxReActIterations > 0 {
+			maxIter = cfg.Agent.MaxReActIterations
+		}
+		if cfg.Agent.TaskTimeoutSec > 0 {
+			taskTimeout = time.Duration(cfg.Agent.TaskTimeoutSec) * time.Second
+		}
+	}
+
 	agent := &Agent{
 		llmClient:          llm.NewLLMClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model),
 		toolRegistry:       skill.NewToolRegistry(),
 		taskQueue:          make(chan *Task, 100), // 任务队列，缓冲 100 个任务
 		sessions:           make(map[string]*Session),
-		maxReActIterations: 20,            // 最大 20 次 ReAct 迭代
+		maxReActIterations: maxIter,
+		taskTimeout:        taskTimeout,
 		maxSessionAge:      1 * time.Hour, // 会话最大存活 1 小时
-		configPath:         configPath,    // 保存配置文件路径
+		configPath:         configPath,
 	}
 
 	apiKeyPreview := cfg.LLM.APIKey

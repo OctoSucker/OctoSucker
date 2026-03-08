@@ -19,7 +19,7 @@ func (a *Agent) executeToolCall(ctx context.Context, toolCall llm.ToolCall) (int
 	}
 
 	// 执行工具
-	toolResult, err := a.toolRegistry.ExecuteTool(toolCall.Name, string(argumentsJSON))
+	toolResult, err := a.toolRegistry.ExecuteTool(ctx, toolCall.Name, string(argumentsJSON))
 	if err != nil {
 		log.Printf("Tool %s execution failed: %v", toolCall.Name, err)
 		return nil, err

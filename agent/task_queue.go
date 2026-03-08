@@ -14,8 +14,17 @@ func (a *Agent) runTaskQueueProcessor(ctx context.Context) {
 			log.Printf("Task queue processor: context cancelled, exiting")
 			return
 		case task := <-a.taskQueue:
-			// 为每个任务启动独立的 ReAct 循环
-			go a.runReActLoop(ctx, task)
+			loopCtx := ctx
+			var cancel context.CancelFunc
+			if a.taskTimeout > 0 {
+				loopCtx, cancel = context.WithTimeout(ctx, a.taskTimeout)
+			}
+			go func() {
+				if cancel != nil {
+					defer cancel()
+				}
+				a.runReActLoop(loopCtx, task)
+			}()
 		}
 	}
 }

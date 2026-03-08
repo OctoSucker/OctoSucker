@@ -9,10 +9,19 @@ import (
 type AgentConfig struct {
 	LLM *LLMConfig `json:"llm,omitempty"`
 
+	// Agent/ReAct 配置（可选）
+	Agent *ReActConfig `json:"agent,omitempty"` // ReAct 循环与任务超时
+
 	// Skill 配置（可选）
 	Telegram *TelegramConfig `json:"telegram,omitempty"` // Telegram Skill 配置
 	Fs       *FsConfig      `json:"fs,omitempty"`       // 文件系统 Skill 配置
 	Web      *WebConfig     `json:"web,omitempty"`      // Web Skill 配置
+}
+
+// ReActConfig ReAct 循环与单任务超时配置
+type ReActConfig struct {
+	MaxReActIterations int `json:"max_react_iterations,omitempty"` // 最大 ReAct 迭代次数，默认 20
+	TaskTimeoutSec     int `json:"task_timeout_sec,omitempty"`      // 单任务超时秒数，0 表示不限制
 }
 
 // WebConfig Web Skill 配置（浏览器自动化 + HTTP 抓取，无 Brave/Serper）
