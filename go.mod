@@ -1,8 +1,9 @@
 module github.com/OctoSucker/octosucker
 
-go 1.25.0
+go 1.25.4
 
 require (
+	github.com/OctoSucker/octosucker-skills v0.0.0
 	github.com/OctoSucker/octosucker-tools v0.0.0
 	github.com/OctoSucker/tools-cron v0.0.0
 	github.com/OctoSucker/tools-exec v0.0.0
@@ -10,6 +11,7 @@ require (
 	github.com/OctoSucker/tools-mcp v0.0.0
 	github.com/OctoSucker/tools-remember v0.0.0
 	github.com/OctoSucker/tools-telegram v0.0.0-00010101000000-000000000000
+	github.com/OctoSucker/tools-web v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go v1.12.0
 )
@@ -31,9 +33,11 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
+	golang.org/x/net v0.34.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 	modernc.org/libc v1.41.0 // indirect
 	modernc.org/mathutil v1.6.0 // indirect
@@ -46,6 +50,8 @@ require (
 replace github.com/google-agentic-commerce/a2a-x402 => /Users/zecrey/Desktop/yiming/a2a-x402/golang
 
 // 本地开发
+replace github.com/OctoSucker/octosucker-skills => ../octosucker-skills
+
 replace github.com/OctoSucker/octosucker-tools => ../octosucker-tools
 
 replace github.com/OctoSucker/tools-agent-chat => ../tools-agent-chat
