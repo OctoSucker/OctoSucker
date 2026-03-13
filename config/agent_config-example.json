@@ -1,0 +1,86 @@
+{
+  "llm": {
+    "baseURL": "",
+    "apiKey": "",
+    "model": "qwen3.5-plus"
+  },
+  "react": {
+    "max_react_iterations": 20,
+    "task_timeout_sec": 30,
+    "memory_path": "workspace/memory",
+    "embedding_model": "text-embedding-v3"
+  },
+  "tool_providers": {
+    "github.com/OctoSucker/tools-telegram": {
+      "bot_token": "",
+      "dm_policy": "pairing",
+      "group_policy": "open",
+      "require_mention": false,
+      "allowed_user_ids": [2004898179],
+      "max_message_store_size": 1000
+    },
+    "github.com/OctoSucker/tools-fs": {
+      "workspace_dirs": [
+        "workspace"
+      ]
+    },
+    "github.com/OctoSucker/tools-web": {
+      "fetch_max_chars": 50000
+    },
+    "github.com/OctoSucker/tools-mcp": {
+      "servers": [
+        { "id": "exa", "url": "https://mcp.exa.ai/mcp" },
+        {
+          "id": "context7",
+          "url": "https://mcp.context7.com/mcp"
+        }
+      ]
+    },
+    "github.com/OctoSucker/tools-remember": {
+      "storage_path": "workspace/remember.db",
+      "max_content_size": 1048576
+    },
+    "github.com/OctoSucker/tools-cron": {
+      "storage_path": "workspace/cron.db",
+      "timezone": "Asia/Shanghai",
+      "schedules": []
+    },
+    "github.com/OctoSucker/tools-exec": {
+      "workspace_dirs": [
+        "."
+      ],
+      "command_timeout_sec": 30,
+      "command_blacklist": [
+        "rm -rf /",
+        "curl | bash",
+        "wget -O- | bash",
+        "curl | sh",
+        "wget -O- | sh",
+        "wget | bash",
+        "wget | sh",
+        "dd of=/dev/",
+        "dd if=/dev/zero",
+        "mkfs.",
+        "chmod -R 777 /",
+        "chown -R ",
+        ":(){",
+        "> /dev/sd",
+        "> /dev/nvme",
+        "shred /dev/"
+      ],
+      "sandbox_enabled": true,
+      "sandbox_type": "docker",  
+      "sandbox_cpu_sec": 60,
+      "sandbox_memory_mb": 256,
+      "sandbox_max_procs": 32,
+      "sandbox_max_open_files": 64,
+      "sandbox_network": "none",
+      "docker_image": "alpine:latest",
+      "docker_binary": "docker"
+    }
+  },
+  "memory": {
+    "memory_path": "workspace/memory",
+    "embedding_model": "text-embedding-v3"
+  }
+}
