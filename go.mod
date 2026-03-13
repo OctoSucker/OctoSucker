@@ -46,28 +46,3 @@ require (
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
 )
-
-replace github.com/google-agentic-commerce/a2a-x402 => /Users/zecrey/Desktop/yiming/a2a-x402/golang
-
-// 本地开发
-replace github.com/OctoSucker/octosucker-skills => ../octosucker-skills
-
-replace github.com/OctoSucker/octosucker-tools => ../octosucker-tools
-
-replace github.com/OctoSucker/tools-agent-chat => ../tools-agent-chat
-
-replace github.com/OctoSucker/octosucker-utils => ../octosucker-utils
-
-replace github.com/OctoSucker/tools-cron => ../tools-cron
-
-replace github.com/OctoSucker/tools-exec => ../tools-exec
-
-replace github.com/OctoSucker/tools-fs => ../tools-fs
-
-replace github.com/OctoSucker/tools-mcp => ../tools-mcp
-
-replace github.com/OctoSucker/tools-remember => ../tools-remember
-
-replace github.com/OctoSucker/tools-telegram => ../tools-telegram
-
-replace github.com/OctoSucker/tools-web => ../tools-web
