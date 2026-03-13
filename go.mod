@@ -3,15 +3,15 @@ module github.com/OctoSucker/octosucker
 go 1.25.4
 
 require (
-	github.com/OctoSucker/octosucker-skills v0.0.0
-	github.com/OctoSucker/octosucker-tools v0.0.0
-	github.com/OctoSucker/tools-cron v0.0.0
-	github.com/OctoSucker/tools-exec v0.0.0
-	github.com/OctoSucker/tools-fs v0.0.0
-	github.com/OctoSucker/tools-mcp v0.0.0
-	github.com/OctoSucker/tools-remember v0.0.0
-	github.com/OctoSucker/tools-telegram v0.0.0-00010101000000-000000000000
-	github.com/OctoSucker/tools-web v0.0.0-00010101000000-000000000000
+	github.com/OctoSucker/octosucker-skills v0.0.0-20260313143339-de3ceaddc92f
+	github.com/OctoSucker/octosucker-tools v0.0.0-20260313143338-cd2656c207cc
+	github.com/OctoSucker/tools-cron v0.0.0-20260313145614-ca01db9ad08e
+	github.com/OctoSucker/tools-exec v0.0.0-20260313145612-a891f3580e70
+	github.com/OctoSucker/tools-fs v0.0.0-20260313145613-634e0cea3660
+	github.com/OctoSucker/tools-mcp v0.0.0-20260313145615-ea85f019a9aa
+	github.com/OctoSucker/tools-remember v0.0.0-20260313145616-cad0a4faca4c
+	github.com/OctoSucker/tools-telegram v0.0.0-20260313145617-1424e81beb1f
+	github.com/OctoSucker/tools-web v0.0.0-20260313145639-ce88e4da96f3
 	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go v1.12.0
 )
