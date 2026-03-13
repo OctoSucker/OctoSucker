@@ -33,19 +33,24 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	promptConfig, err := config.LoadSystemPrompt()
+	if err != nil {
+		log.Fatalf("Failed to load system prompt: %v", err)
+	}
+
 	agentInstance, err := agent.NewAgent(
 		ctx,
 		*configPath,
 		llmCfg,
 		reactCfg,
 		toolProviderConfigs,
-		config.LoadSystemPrompt().SystemPrompt,
+		promptConfig.SystemPrompt,
 	)
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
 
-	if err := agentInstance.Start(ctx, config.LoadSystemPrompt().StartupTasks); err != nil {
+	if err := agentInstance.Start(ctx, promptConfig.StartupTasks); err != nil {
 		log.Fatalf("Failed to start agent: %v", err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	skills "github.com/OctoSucker/octosucker-skills"
 	tools "github.com/OctoSucker/octosucker-tools"
 	"github.com/OctoSucker/octosucker/agent/llm"
 	"github.com/OctoSucker/octosucker/agent/memory"
@@ -14,6 +15,7 @@ import (
 type Agent struct {
 	llmClient          *llm.LLMClient
 	toolRegistry       *tools.ToolRegistry
+	skillRegistry      *skills.Registry
 	memory             memory.VectorMemory
 	taskQueue          chan *Task
 	maxReActIterations int
@@ -39,6 +41,7 @@ func NewAgent(
 	agent := &Agent{
 		llmClient:          llmClient,
 		toolRegistry:       tools.NewToolRegistry(),
+		skillRegistry:      skills.NewRegistry(),
 		memory:             mem,
 		taskQueue:          make(chan *Task, 100),
 		maxReActIterations: reactCfg.MaxReActIterations,
@@ -53,6 +56,10 @@ func NewAgent(
 		for name, err := range failed {
 			log.Printf("  - %s: %v", name, err)
 		}
+	}
+
+	if err := agent.skillRegistry.LoadFromDirs([]string{".cursor/skills"}); err != nil {
+		log.Printf("Warning: failed to load skills from .cursor/skills: %v", err)
 	}
 	return agent, nil
 }
@@ -91,4 +98,8 @@ func (a *Agent) runTaskQueueProcessor(ctx context.Context) {
 
 func (a *Agent) GetConfigPath() string {
 	return a.configPath
+}
+
+func (a *Agent) SkillRegistry() *skills.Registry {
+	return a.skillRegistry
 }
