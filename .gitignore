@@ -35,3 +35,7 @@ config/*.json
 # Editor/IDE
 # .idea/
 # .vscode/
+
+workspace/cron.db
+workspace/memory
+workspace/remember.db
