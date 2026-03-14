@@ -30,6 +30,7 @@ func NewAgent(
 	llmCfg *config.LLMConfig,
 	reactCfg *config.ReActConfig,
 	toolProviderConfigs map[string]map[string]interface{},
+	skillsDirs []string,
 	systemPrompt string,
 ) (*Agent, error) {
 
@@ -58,8 +59,10 @@ func NewAgent(
 		}
 	}
 
-	if err := agent.skillRegistry.LoadFromDirs([]string{".cursor/skills"}); err != nil {
-		log.Printf("Warning: failed to load skills from .cursor/skills: %v", err)
+	if len(skillsDirs) > 0 {
+		if err := agent.skillRegistry.LoadFromDirs(skillsDirs); err != nil {
+			log.Printf("Warning: failed to load skills from %v: %v", skillsDirs, err)
+		}
 	}
 	return agent, nil
 }

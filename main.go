@@ -28,7 +28,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	llmCfg, reactCfg, toolProviderConfigs, err := config.LoadConfig(*configPath)
+	llmCfg, reactCfg, toolProviderConfigs, skillsDirs, err := config.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -44,6 +44,7 @@ func main() {
 		llmCfg,
 		reactCfg,
 		toolProviderConfigs,
+		skillsDirs,
 		promptConfig.SystemPrompt,
 	)
 	if err != nil {

@@ -7,9 +7,14 @@ import (
 )
 
 type AgentConfig struct {
-	LLM    *LLMConfig                        `json:"llm,omitempty"`
-	ReAct  *ReActConfig                      `json:"react,omitempty"`
+	LLM           *LLMConfig                        `json:"llm,omitempty"`
+	ReAct         *ReActConfig                      `json:"react,omitempty"`
 	ToolProviders map[string]map[string]interface{} `json:"tool_providers,omitempty"`
+	Skills        *SkillsConfig                     `json:"skills,omitempty"`
+}
+
+type SkillsConfig struct {
+	Dirs []string `json:"dirs,omitempty"`
 }
 
 type ReActConfig struct {
@@ -25,15 +30,19 @@ type LLMConfig struct {
 	Model   string `json:"model"`
 }
 
-func LoadConfig(configPath string) (*LLMConfig, *ReActConfig, map[string]map[string]interface{}, error) {
+func LoadConfig(configPath string) (*LLMConfig, *ReActConfig, map[string]map[string]interface{}, []string, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	var cfg AgentConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to parse config file: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
-	return cfg.LLM, cfg.ReAct, cfg.ToolProviders, nil
+	skillsDirs := []string{"workspace/skills"}
+	if cfg.Skills != nil && len(cfg.Skills.Dirs) > 0 {
+		skillsDirs = cfg.Skills.Dirs
+	}
+	return cfg.LLM, cfg.ReAct, cfg.ToolProviders, skillsDirs, nil
 }

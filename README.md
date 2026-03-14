@@ -47,7 +47,7 @@ An AI agent execution platform with a **Tool Provider** system and **Skills regi
 
 - **目标**：兼容 Claude Code / Cursor 的 `SKILL.md` 标准，支持通过 Go 模块统一解析和管理技能定义。
 - **能力**：
-  - 扫描指定目录（如项目 `.cursor/skills/` 或全局路径）下的 `SKILL.md`。
+  - 扫描指定目录（默认 `workspace/skills/`）下的 `SKILL.md`。
   - 解析 YAML frontmatter 与正文，生成：
     - `Skill{Name, Description, Body, Path, Metadata}`
   - 通过：
