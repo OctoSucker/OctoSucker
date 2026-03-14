@@ -82,5 +82,8 @@
   "memory": {
     "memory_path": "workspace/memory",
     "embedding_model": "text-embedding-v3"
+  },
+  "skills": {
+    "dirs": ["workspace/skills"]
   }
 }
