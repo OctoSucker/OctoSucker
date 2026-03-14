@@ -10,6 +10,8 @@ github.com/OctoSucker/tools-fs v0.0.0-20260313145613-634e0cea3660 h1:Cc3niy5EeGf
 github.com/OctoSucker/tools-fs v0.0.0-20260313145613-634e0cea3660/go.mod h1:0zE19LuganPN2Tm5bmaOvMZFihTqwl200m5Rc+F0Ahw=
 github.com/OctoSucker/tools-mcp v0.0.0-20260313145615-ea85f019a9aa h1:fZ+TPbzUjyvN5VLVp7oN2tYo3Q+gsxT5eCY7gI4LNLU=
 github.com/OctoSucker/tools-mcp v0.0.0-20260313145615-ea85f019a9aa/go.mod h1:/ENp/oUgljCahZIp1CwYIvVZq6Zl8HKMCB7l9EIlg8Q=
+github.com/OctoSucker/tools-mcp v0.0.0-20260314023204-987f8800e9d7 h1:jlAelZLnJ023S0/ErlUDJi38fmCyMTf0DYVrcfW5nTU=
+github.com/OctoSucker/tools-mcp v0.0.0-20260314023204-987f8800e9d7/go.mod h1:/ENp/oUgljCahZIp1CwYIvVZq6Zl8HKMCB7l9EIlg8Q=
 github.com/OctoSucker/tools-remember v0.0.0-20260313145616-cad0a4faca4c h1:HWcNv8cP3W9IWFJtczcF8C3YpHRrAFePIJIy8AUG3n0=
 github.com/OctoSucker/tools-remember v0.0.0-20260313145616-cad0a4faca4c/go.mod h1:wE6SJy1RSDhALt0fy9nxDuP5HM6BLsMObH6xPcg/Ih0=
 github.com/OctoSucker/tools-telegram v0.0.0-20260313145617-1424e81beb1f h1:lqstQ9OF3j2LJQRhSgrxGOZLK0MXznXawsWKpq1q4fk=
