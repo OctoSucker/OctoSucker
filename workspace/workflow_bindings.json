@@ -1,0 +1,9 @@
+{
+  "signature": "c26ccd4d125a83af791c55470b6f27fa6c1df2187f253aaa8a5c714fdfba7b1d",
+  "bindings": {
+    "chrome-cdp/chrome-cdp": "github.com/OctoSucker/tools-cron/cron_toggle",
+    "research/discover": "github.com/OctoSucker/tools-web/web_search",
+    "research/read": "github.com/OctoSucker/tools-web/web_fetch",
+    "research/synthesize": "github.com/OctoSucker/tools-remember/remember_search"
+  }
+}

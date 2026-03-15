@@ -47,6 +47,24 @@ func (c *LLMClient) ChatCompletion(ctx context.Context, messages string) (string
 	return chatCompletion.Choices[0].Message.Content, nil
 }
 
+func (c *LLMClient) ChatCompletionWithSystem(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	msgs := []openai.ChatCompletionMessageParamUnion{
+		openai.SystemMessage(systemPrompt),
+		openai.UserMessage(userPrompt),
+	}
+	chatCompletion, err := c.Client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Messages: msgs,
+		Model:    c.model,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get chat completion: %w", err)
+	}
+	if len(chatCompletion.Choices) == 0 {
+		return "", fmt.Errorf("no choices in response")
+	}
+	return chatCompletion.Choices[0].Message.Content, nil
+}
+
 func (c *LLMClient) ChatCompletionWithTools(
 	ctx context.Context,
 	messages []openai.ChatCompletionMessageParamUnion,

@@ -7,8 +7,24 @@
   "react": {
     "max_react_iterations": 20,
     "task_timeout_sec": 30,
+    "max_tool_retries": 2,
+    "tool_timeout_ms": 15000,
+    "selector_semantic_candidate_limit": 24,
+    "selector_embedding_cache_ttl_sec": 600,
+    "workflow_binding_cache_path": "workspace/workflow_bindings.json",
     "memory_path": "workspace/memory",
-    "embedding_model": "text-embedding-v3"
+    "embedding_model": "text-embedding-v3",
+    "skill_workflows": [
+      {
+        "name": "research",
+        "description": "发现信息、读取内容、整理结论",
+        "steps": [
+          { "name": "discover", "description": "发现候选信息源", "keywords": ["search", "find", "query", "web"], "tool": "search_web" },
+          { "name": "read", "description": "读取和抽取信息", "keywords": ["read", "fetch", "open", "extract"] },
+          { "name": "synthesize", "description": "输出总结结论", "keywords": ["summarize", "analyze", "report"] }
+        ]
+      }
+    ]
   },
   "tool_providers": {
     "github.com/OctoSucker/tools-telegram": {
@@ -82,8 +98,5 @@
   "memory": {
     "memory_path": "workspace/memory",
     "embedding_model": "text-embedding-v3"
-  },
-  "skills": {
-    "dirs": ["workspace/skills"]
   }
 }
