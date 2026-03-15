@@ -1,136 +1,125 @@
 # OctoSucker
 
-An AI agent execution platform with a **Tool Provider** system and **Skills registry**, built for fast iteration and local-first workflows.
+An AI agent execution platform with a **Tool Provider** system, built for fast iteration and local-first workflows.
 
 - 单 Agent、任务队列驱动的 **ReAct 循环执行引擎**
 - 通过 `octosucker-tools` 加载的可插拔 **Tool Provider 体系**
-- 通过 `octosucker-skills` 提供的 **Skill Registry（SKILL.md 解析器）**
 - 通过本地 `workspace/*.md` 文件配置的 **系统提示词与启动任务**
 
 ---
 
 ## 核心架构
 
-### Agent 核心
+### AgentRuntime 与架构
+
+顶层运行时为 **AgentRuntime**，其下为 **ToolRegistry**（本地工具）、**MCPRegistry**（MCP 工具）与 **Capability Registry**（能力图/技能编排）。详见 [docs/architecture.md](../docs/architecture.md)。
+
+### AgentRuntime 核心
 
 - **ReAct 循环**：Reasoning → Acting → Observing，直至任务完成或达到迭代/超时上限。
-- **任务队列**：`agent.Task` 通过 `SubmitTask` 进入队列，由 `runTaskQueueProcessor` 并发执行。
+- **能力自动装配**：启动时通过 `LoadAllToolProviders` 加载各 Tool Provider，将注册的 Tool 写入 **ToolRegistry**，再经 `RegisterToolCapabilities` 映射为能力图节点，并刷新入口 capability 集合。
+- **任务队列**：`Task` 通过 `SubmitTask` 进入队列，由 `runTaskQueueProcessor` 串行执行。
 - **向量记忆**：
   - 使用 `agent/memory` 本地向量存储（JSONL + embedding）。
-  - 在任务第一轮推理前检索相关记忆注入系统消息。
+  - 在任务推理前检索相关记忆注入系统消息。
   - 工具调用结果和最终回答写回记忆。
 - **LLM 集成**：
-  - 通过 `agent/llm.LLMClient` 封装 OpenAI 兼容接口。
-  - 支持 Function Calling，用于调用 Tool Provider 暴露的工具。
+  - 通过 `agent/llm` 封装 OpenAI 兼容接口。
+  - 支持 Function Calling，调用 ToolRegistry / MCPRegistry 中的工具。
 
 ### Tool Provider 系统（`github.com/OctoSucker/octosucker-tools`）
 
-- **统一注册机制**：
-  - 每个工具包（如 `tools-fs`、`tools-web`、`tools-exec`、`tools-mcp` 等）在 `init()` 中调用：
-    - `tools.RegisterToolProviderWithMetadata(...)`
-  - `OctoSucker` 主程序通过：
-    - `tools.LoadAllToolProviders(toolRegistry, agent, cfg.ToolProviders)`
-    加载并初始化所有 Tool Provider。
-- **生命周期接口**：
-  - 可选实现 `ToolProviderLifecycle`：
-    - `Init(config map[string]interface{}) error`
-    - `Cleanup() error`
-  - 支持运行时通过工具触发 `reload_tool_provider` 等能力（见 `octosucker-tools/builtin.go`）。
+- **两套注册表**：
+  - **Provider Registry**（`tool_provider_registry.go`）：维护「provider 名 → ToolProviderInfo」的全局表，表示有哪些工具**包**（每个包可提供多个 tool）。
+  - **Tool Registry**（`tool_registry.go`）：维护「工具全名 → Tool」的表，工具全名格式为 `providerName/toolName`（如 `github.com/OctoSucker/tools-fs/read_file`），用于查表与执行。
+
+- **注册与加载流程**：
+  - 各工具包（如 `tools-fs`、`tools-web`、`tools-telegram`）在 `init()` 中调用：
+    - `tools.RegisterToolProvider(&tools.ToolProviderInfo{ Name, Description, Provider })`
+  - 主程序启动时调用：
+    - `tools.LoadAllToolProviders(toolRegistry, agent, cfg.ToolProviders, rt.SubmitTask)`
+  - 加载时对每个已注册的 Provider：先 `Provider.Init(config, submitTask)`，再 `Provider.Register(toolRegistry, agent, providerName)`，由各包把名下 tool 注册进 ToolRegistry；同时填充 `ToolProviderInfo.Loaded`、`InitError`。
+
+- **ToolProvider 接口**（每个工具包实现）：
+  - `Init(config, submitTask) error`：用配置与提交任务的回调做初始化。
+  - `Cleanup() error`：卸载/释放资源。
+  - `Register(registry, agent, providerName) error`：向 `registry` 注册该包提供的多个 Tool（`registry.RegisterTool(providerName, &Tool{...})`）。
+
 - **工具暴露形式**：
-  - 每个 Tool 为：
-    - `Name`：工具名（如 `read_file`、`web_fetch`、`mcp_exa_search`）
-    - `Description`：LLM 可读说明
-    - `Parameters`：JSON Schema 风格的参数定义
-    - `Handler(ctx, params)`：Go 实现
+  - 每个 Tool 包含：`Name`（短名，如 `read_file`）、`Description`、`Parameters`（JSON Schema）、`Handler(ctx, params)`。
+  - 在 ToolRegistry 与能力图中的**唯一名**为 `providerName/toolName`，避免不同包同名 tool 冲突。
 
-### Skills Registry（`github.com/OctoSucker/octosucker-skills`）
-
-- **目标**：兼容 Claude Code / Cursor 的 `SKILL.md` 标准，支持通过 Go 模块统一解析和管理技能定义。
-- **能力**：
-  - 扫描指定目录（默认 `workspace/skills/`）下的 `SKILL.md`。
-  - 解析 YAML frontmatter 与正文，生成：
-    - `Skill{Name, Description, Body, Path, Metadata}`
-  - 通过：
-    - `skills.NewRegistry()`
-    - `(*Registry).LoadFromDirs(dirs []string)`
-    - `(*Registry).List()` / `Get(name)`
-    向 Agent 暴露统一接口。
-- **与 Agent 的关系**：
-  - `Agent` 持有 `skillRegistry *skills.Registry`。
-  - 后续可通过 Tool Provider 暴露工具如 `skill.list`、`skill.invoke`，让 LLM 主动选择并应用技能。
+- **内建与重载**：
+  - 内建能力（如 `log_message`、`list_tool_providers`、`reload_tool_provider`、`read_config_file`）由 `octosucker-tools/builtin_tool_provider` 提供。
+  - 运行时可通过 `reload_tool_provider` 工具重新加载指定 Provider（先 Cleanup 再 Init + Register）。
 
 ### MCP 工具（`tools-mcp`）
 
-- 使用 Model Context Protocol（MCP）连接外部服务（如 Exa、Context7 等）。
-- 启动时根据配置的 servers：
-  - 连接 MCP server，调用 `ListTools`。
-  - 将每个 MCP 工具编译成普通 Tool（如 `mcp_exa_search`）。
-  - 额外提供元信息工具 `mcp_list_servers`、`mcp_*_meta`。
-- 对 Agent 来说，MCP 能力完全以“普通工具”形式出现，由 LLM 通过 Function Calling 调用。
+- 使用 Model Context Protocol（MCP）连接外部服务。
+- 启动时根据配置连接 MCP server、拉取工具列表，将每个 MCP 工具编译为普通 Tool 形态注册。
+- 对 Agent 而言，MCP 能力与本地 Tool 一致，由 LLM 通过 Function Calling 调用；执行时由 MCPRegistry 处理。
 
 ---
 
 ## 配置与运行
 
-### 配置文件（`config/agent_config.json`）
+### 配置文件（`workspace/config.json`）
 
-- **llm**：LLM 相关配置
-  - `baseURL`：OpenAI 兼容接口地址（如 DashScope）
+- **llm**：LLM 配置
+  - `baseURL`：OpenAI 兼容接口地址
   - `apiKey`：API 密钥
   - `model`：聊天模型名称
-- **react**：ReAct 相关配置
+- **react**：ReAct 配置
   - `max_react_iterations`：单任务最大推理迭代次数
-  - `task_timeout_sec`：单任务超时时间
-  - `memory_path`：向量记忆存储路径（如 `workspace/memory`）
-  - `embedding_model`：embedding 模型名称
-- **tool_providers**：每个 Tool Provider 的配置（按 provider 名字分组）
-  - 例如：
-    - `github.com/OctoSucker/tools-fs`：`workspace_dirs` 白名单
-    - `github.com/OctoSucker/tools-web`：`browser_proxy`、`browser_headless` 等
-    - `github.com/OctoSucker/tools-exec`：命令白名单/黑名单、沙箱设置
-    - `github.com/OctoSucker/tools-mcp`：MCP servers 列表
+  - `task_timeout_sec`：单任务超时
+  - `max_tool_retries`：单次工具执行失败重试次数
+  - `tool_timeout_ms`：单次工具执行超时（毫秒）
+  - `memory_path`：向量记忆路径（如 `workspace/memory`）
+  - `embedding_model`：embedding 模型
+- **tool_providers**：按 provider 名分组的配置，在 `LoadAllToolProviders` 时作为 `config` 传入各 Provider 的 `Init`。
+  - 例如：`github.com/OctoSucker/tools-fs` 的 `workspace_dirs`、`github.com/OctoSucker/tools-web` 的 `search_api_key`、`github.com/OctoSucker/tools-exec` 的 `workspace_dirs`/沙箱设置、`github.com/OctoSucker/octosucker-tools/builtin` 的 `config_path` 等。
 
 ### 系统提示和启动任务（`workspace/*.md`）
 
-- **系统提示词**：`workspace/system_prompt.md`
-  - 内容为 Agent 的系统级指导（如何区分任务/查询/闲聊、如何使用工具、remember_* 原则、定时任务前缀、MCP 工具说明等）。
-  - 在启动时通过 `config.LoadSystemPrompt()` 读入并传给 `agent.NewAgent`。
-- **启动任务**：`workspace/startup_tasks.md`
-  - 按 `\n---\n` 分隔的多段 Markdown，每一段是一个启动时要执行的初始化任务描述。
-  - 在 `main.go` 中作为 `StartupTasks` 传给 `agent.Start`，由 Agent 以普通任务形式排队执行。
+- **系统提示词**：`workspace/system_prompt.md`，由 `config.LoadSystemPrompt()` 读入并传给 `NewAgentRuntime`。
+- **启动任务**：`workspace/startup_tasks.md`，按 `\n---\n` 分段，每段为一条启动任务描述，在 `main.go` 中作为 `StartupTasks` 传给 `AgentRuntime.Start` 排队执行。
 
 ---
 
-## 项目结构（当前）
+## 项目结构
 
 ```
 OctoSucker/
 ├── README.md
-├── LICENSE
 ├── go.mod
 ├── go.sum
-├── agent/
-│   ├── agent.go        # Agent 核心（任务队列、ReAct 循环）
-│   ├── react.go        # ReAct 逻辑与工具调用
-│   ├── task.go         # Task 定义与提交
-│   ├── llm/            # LLM 客户端封装
-│   └── memory/         # 向量记忆
+├── main.go                    # 入口：加载配置、创建 AgentRuntime、启动任务
 ├── config/
-│   ├── agent_config.json  # LLM / ReAct / Tool Provider 配置
-│   ├── config.go          # 配置加载
-│   └── prompt.go          # 从 workspace/*.md 读取系统提示与启动任务
-├── workspace/
-│   ├── system_prompt.md   # 系统提示词
-│   ├── startup_tasks.md   # 启动任务
-│   └── memory/            # 向量记忆存储（自动生成）
-└── main.go             # 程序入口（加载配置、创建 Agent、启动任务）
+│   ├── config.go              # 配置加载（含 config.json）
+│   └── prompt.go              # 从 workspace/*.md 读取系统提示与启动任务
+├── agent/
+│   ├── runtime/
+│   │   ├── agent.go           # AgentRuntime（任务队列、ReAct、Tool/MCP 调用）
+│   │   ├── react.go           # ReAct 循环与工具执行
+│   │   ├── task.go            # Task 与 SubmitTask
+│   │   └── task_memory.go     # 任务与记忆衔接
+│   ├── planner/               # 规划与能力选择
+│   ├── llm/                   # LLM 客户端与 Function Calling
+│   └── memory/                # 向量记忆存储
+├── capability/
+│   ├── registry/              # 能力图注册表（节点 = providerName/toolName 等）
+│   └── workflow/              # 技能工作流与模板解析
+└── workspace/
+    ├── config.json            # LLM / ReAct / tool_providers 配置
+    ├── system_prompt.md
+    ├── startup_tasks.md
+    └── memory/                # 向量记忆（自动生成）
 ```
 
-外部依赖仓库（单独 Git 仓库）：
+外部依赖（单独仓库）：
 
-- `github.com/OctoSucker/octosucker-tools`：Tool Provider 核心与内建工具
-- `github.com/OctoSucker/octosucker-skills`：Skill Registry（SKILL.md 解析）
-- `github.com/OctoSucker/tools-fs` / `tools-web` / `tools-exec` / `tools-remember` / `tools-cron` / `tools-mcp` / `tools-telegram`：具体工具能力
+- `github.com/OctoSucker/octosucker-tools`：Tool Provider 注册与内建工具（provider_registry、tool_registry、builtin_tool_provider）
+- `github.com/OctoSucker/tools-fs` / `tools-web` / `tools-exec` / `tools-remember` / `tools-cron` / `tools-telegram` / `tools-mcp`：具体工具能力包
 
 ---
 
@@ -139,16 +128,11 @@ OctoSucker/
 ```bash
 cd OctoSucker/OctoSucker
 
-# 确保 go.mod 可拉到所有依赖
 go mod tidy
-
-# 运行 Agent（使用默认配置）
 go run ./...
 ```
 
 启动后：
 
-- Agent 会按 `workspace/startup_tasks.md` 描述执行一系列初始化任务（检查 Tool Provider 状态、启动 Telegram 监听、汇报 MCP 能力等）。
-- 后续可以通过配置的通信渠道（如 Telegram）与 Agent 交互，由 Agent 使用 ReAct 循环自动选择工具完成任务。
-
----
+- 按 `workspace/startup_tasks.md` 执行初始化任务（如检查 Tool Provider 状态、启动 Telegram 监听等）。
+- 通过配置的通信渠道（如 Telegram）与 Agent 交互，由 ReAct 循环选择能力并调用 ToolRegistry / MCPRegistry 中的工具完成任务。

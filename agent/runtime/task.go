@@ -1,4 +1,4 @@
-package agent
+package runtime
 
 import (
 	"fmt"
@@ -8,7 +8,13 @@ import (
 	"github.com/google/uuid"
 )
 
-func (a *Agent) SubmitTask(input string) error {
+type Task struct {
+	ID        string
+	Input     string
+	CreatedAt time.Time
+}
+
+func (r *AgentRuntime) SubmitTask(input string) error {
 	if input == "" {
 		return fmt.Errorf("task input is required")
 	}
@@ -22,21 +28,10 @@ func (a *Agent) SubmitTask(input string) error {
 		inputPreview = inputPreview[:80] + "..."
 	}
 	select {
-	case a.taskQueue <- task:
+	case r.taskQueue <- task:
 		return nil
 	default:
-		log.Printf("[agent] ERROR: Task queue full (capacity=%d), dropping task %s", cap(a.taskQueue), task.ID)
+		log.Printf("[agent] ERROR: Task queue full (capacity=%d), dropping task %s", cap(r.taskQueue), task.ID)
 		return fmt.Errorf("task queue is full, task dropped")
-	}
-}
-
-func (a *Agent) submitInitializationTasks(taskInputs []string) {
-	for _, input := range taskInputs {
-		if input == "" {
-			continue
-		}
-		if err := a.SubmitTask(input); err != nil {
-			log.Printf("Failed to submit startup task: %v", err)
-		}
 	}
 }

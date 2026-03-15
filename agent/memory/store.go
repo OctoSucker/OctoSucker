@@ -15,28 +15,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const MaxMemoryTextLen = 512
-
-type MemoryItem struct {
-	ID        string    `json:"id"`
-	TaskID    string    `json:"task_id"`
-	Text      string    `json:"text"`
-	Vector    []float32 `json:"vector"`
-	CreatedAt int64     `json:"created_at"`
-}
-
-type VectorMemory interface {
-	Add(ctx context.Context, taskID, text string) error
-	Search(ctx context.Context, query string, topK int) ([]MemoryItem, error)
-}
-
-type noopVectorMemory struct{}
-
-func (noopVectorMemory) Add(_ context.Context, _ string, _ string) error { return nil }
-func (noopVectorMemory) Search(_ context.Context, _ string, _ int) ([]MemoryItem, error) {
-	return nil, nil
-}
-
 type fileVectorMemory struct {
 	mu    sync.RWMutex
 	path  string
@@ -46,7 +24,7 @@ type fileVectorMemory struct {
 
 func NewVectorMemory(path string, llmClient *llm.LLMClient) (VectorMemory, error) {
 	if path == "" || llmClient == nil {
-		return noopVectorMemory{}, nil
+		return &fileVectorMemory{path: path, llm: nil}, nil
 	}
 	dir := filepath.Dir(path)
 	if dir != "." {
@@ -109,7 +87,7 @@ func (m *fileVectorMemory) appendToFile(item MemoryItem) error {
 }
 
 func (m *fileVectorMemory) Add(ctx context.Context, taskID, text string) error {
-	if text == "" {
+	if m.llm == nil || text == "" {
 		return nil
 	}
 	vec, err := m.llm.Embed(ctx, text)
@@ -119,7 +97,7 @@ func (m *fileVectorMemory) Add(ctx context.Context, taskID, text string) error {
 	item := MemoryItem{
 		ID:        uuid.New().String(),
 		TaskID:    taskID,
-		Text:      truncate(text, MaxMemoryTextLen),
+		Text:      truncateText(text, MaxMemoryTextLen),
 		Vector:    vec,
 		CreatedAt: time.Now().Unix(),
 	}
@@ -132,7 +110,7 @@ func (m *fileVectorMemory) Add(ctx context.Context, taskID, text string) error {
 }
 
 func (m *fileVectorMemory) Search(ctx context.Context, query string, topK int) ([]MemoryItem, error) {
-	if query == "" {
+	if m.llm == nil || query == "" {
 		return nil, nil
 	}
 	if topK <= 0 {
@@ -181,4 +159,14 @@ func (m *fileVectorMemory) Search(ctx context.Context, query string, topK int) (
 		out = append(out, r.item)
 	}
 	return out, nil
+}
+
+func truncateText(s string, max int) string {
+	if max <= 0 {
+		max = MaxMemoryTextLen
+	}
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
