@@ -31,7 +31,7 @@ An AI agent execution platform with a **Tool Provider** system, built for fast i
 
 - **两套注册表**：
   - **Provider Registry**（`tool_provider_registry.go`）：维护「provider 名 → ToolProviderInfo」的全局表，表示有哪些工具**包**（每个包可提供多个 tool）。
-  - **Tool Registry**（`tool_registry.go`）：维护「工具全名 → Tool」的表，工具全名格式为 `providerName/toolName`（如 `github.com/OctoSucker/tools-fs/read_file`），用于查表与执行。
+  - **Tool Registry**（`tool_registry.go`）：内部以 `providerName/toolName` 为 key 存 Tool；对外（能力图、LLM）暴露**公开名**：无重名时用短名（如 `read_file`），重名时用全名，执行时 GetTool 支持短名解析。
 
 - **注册与加载流程**：
   - 各工具包（如 `tools-fs`、`tools-web`、`tools-telegram`）在 `init()` 中调用：
@@ -47,7 +47,7 @@ An AI agent execution platform with a **Tool Provider** system, built for fast i
 
 - **工具暴露形式**：
   - 每个 Tool 包含：`Name`（短名，如 `read_file`）、`Description`、`Parameters`（JSON Schema）、`Handler(ctx, params)`。
-  - 在 ToolRegistry 与能力图中的**唯一名**为 `providerName/toolName`，避免不同包同名 tool 冲突。
+  - 能力图与 LLM 所见工具名：无重名时用短名，多 provider 提供同名 tool 时用全名；执行时按短名或全名均可解析。
 
 - **内建与重载**：
   - 内建能力（如 `log_message`、`list_tool_providers`、`reload_tool_provider`、`read_config_file`）由 `octosucker-tools/builtin_tool_provider` 提供。

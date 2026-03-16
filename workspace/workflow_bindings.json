@@ -1,6 +1,6 @@
 {
   "signature": "7e1d5eb654fd5a4db206fb7e5732d6da49ec118a16d7d76f3cd358003db29297",
   "bindings": {
-    "chrome-cdp/chrome-cdp": "github.com/OctoSucker/tools-cron/cron_toggle"
+    "chrome-cdp/chrome-cdp": "cron_toggle"
   }
 }
