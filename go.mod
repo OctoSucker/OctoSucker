@@ -3,7 +3,7 @@ module github.com/OctoSucker/octosucker
 go 1.25.4
 
 require (
-	github.com/OctoSucker/octosucker-tools v0.0.0-20260313143338-cd2656c207cc
+	github.com/OctoSucker/octosucker-tools v0.0.0-20260315170737-a8c8505a7e69
 	github.com/OctoSucker/octosucker-utils v0.0.0
 	github.com/OctoSucker/tools-cron v0.0.0-20260313145614-ca01db9ad08e
 	github.com/OctoSucker/tools-exec v0.0.0-20260313145612-a891f3580e70
@@ -47,14 +47,3 @@ require (
 	modernc.org/token v1.1.0 // indirect
 )
 
-replace (
-	github.com/OctoSucker/octosucker-tools => ../octosucker-tools
-	github.com/OctoSucker/octosucker-utils => ../octosucker-utils
-	github.com/OctoSucker/tools-cron => ../tools-cron
-	github.com/OctoSucker/tools-exec => ../tools-exec
-	github.com/OctoSucker/tools-fs => ../tools-fs
-	github.com/OctoSucker/tools-mcp => ../octosucker-mcp
-	github.com/OctoSucker/tools-remember => ../tools-remember
-	github.com/OctoSucker/tools-telegram => ../tools-telegram
-	github.com/OctoSucker/tools-web => ../tools-web
-)
