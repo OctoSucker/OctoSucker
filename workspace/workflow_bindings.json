@@ -1,9 +1,6 @@
 {
-  "signature": "c26ccd4d125a83af791c55470b6f27fa6c1df2187f253aaa8a5c714fdfba7b1d",
+  "signature": "7e1d5eb654fd5a4db206fb7e5732d6da49ec118a16d7d76f3cd358003db29297",
   "bindings": {
-    "chrome-cdp/chrome-cdp": "github.com/OctoSucker/tools-cron/cron_toggle",
-    "research/discover": "github.com/OctoSucker/tools-web/web_search",
-    "research/read": "github.com/OctoSucker/tools-web/web_fetch",
-    "research/synthesize": "github.com/OctoSucker/tools-remember/remember_search"
+    "chrome-cdp/chrome-cdp": "github.com/OctoSucker/tools-cron/cron_toggle"
   }
 }

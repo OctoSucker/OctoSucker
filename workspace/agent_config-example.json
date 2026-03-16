@@ -43,7 +43,7 @@
     "github.com/OctoSucker/tools-web": {
       "fetch_max_chars": 50000
     },
-    "github.com/OctoSucker/tools-mcp": {
+    "github.com/OctoSucker/octosucker-mcp": {
       "servers": [
         { "id": "exa", "url": "https://mcp.exa.ai/mcp" },
         {

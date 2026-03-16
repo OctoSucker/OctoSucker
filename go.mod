@@ -3,15 +3,15 @@ module github.com/OctoSucker/octosucker
 go 1.25.4
 
 require (
+	github.com/OctoSucker/octosucker-mcp v0.0.0-20260316024412-f4ffa7270b76
 	github.com/OctoSucker/octosucker-tools v0.0.0-20260315170737-a8c8505a7e69
-	github.com/OctoSucker/octosucker-utils v0.0.0
-	github.com/OctoSucker/tools-cron v0.0.0-20260313145614-ca01db9ad08e
-	github.com/OctoSucker/tools-exec v0.0.0-20260313145612-a891f3580e70
-	github.com/OctoSucker/tools-fs v0.0.0-20260313145613-634e0cea3660
-	github.com/OctoSucker/tools-mcp v0.0.0-20260314023510-73c5c26a5815
-	github.com/OctoSucker/tools-remember v0.0.0-20260313145616-cad0a4faca4c
-	github.com/OctoSucker/tools-telegram v0.0.0-20260313145617-1424e81beb1f
-	github.com/OctoSucker/tools-web v0.0.0-20260313145639-ce88e4da96f3
+	github.com/OctoSucker/octosucker-utils v0.0.0-20260315144609-92b37e3038a4
+	github.com/OctoSucker/tools-cron v0.0.0-20260315170858-2ee5cd74f18c
+	github.com/OctoSucker/tools-exec v0.0.0-20260315170930-0c98e7fa2094
+	github.com/OctoSucker/tools-fs v0.0.0-20260315171107-e83fe4a5acb4
+	github.com/OctoSucker/tools-remember v0.0.0-20260315171044-91b6f7cf6cb4
+	github.com/OctoSucker/tools-telegram v0.0.0-20260315171148-39b087b739f9
+	github.com/OctoSucker/tools-web v0.0.0-20260316022206-bcff4bf9329b
 	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go v1.12.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -34,7 +34,8 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	golang.org/x/net v0.34.0 // indirect
+	golang.org/x/mod v0.32.0 // indirect
+	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
@@ -46,4 +47,3 @@ require (
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
 )
-
