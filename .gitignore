@@ -30,6 +30,7 @@ go.work.sum
 
 # config files with sensitive information
 config/*.json
+workspace/*.json
 !config/*.example.json
 
 # Editor/IDE
@@ -39,3 +40,4 @@ config/*.json
 workspace/cron.db
 workspace/memory
 workspace/remember.db
+

@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	mcp "github.com/OctoSucker/octosucker-mcp"
 	tools "github.com/OctoSucker/octosucker-tools"
 	"github.com/OctoSucker/octosucker/agent/llm"
 	"github.com/OctoSucker/octosucker/agent/memory"
@@ -13,7 +14,6 @@ import (
 	capregistry "github.com/OctoSucker/octosucker/capability/registry"
 	capworkflow "github.com/OctoSucker/octosucker/capability/workflow"
 	"github.com/OctoSucker/octosucker/config"
-	mcp "github.com/OctoSucker/tools-mcp"
 )
 
 type AgentRuntime struct {
