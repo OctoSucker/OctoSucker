@@ -1,0 +1,34 @@
+{
+  "capabilities": {
+    "echo": {
+      "tools": [
+        "echo"
+      ]
+    },
+    "finish": {
+      "tools": [
+        "finish"
+      ]
+    },
+    "get_telegram_allowed_chat_ids": {
+      "tools": [
+        "get_telegram_allowed_chat_ids"
+      ]
+    },
+    "get_telegram_bot_info": {
+      "tools": [
+        "get_telegram_bot_info"
+      ]
+    },
+    "get_telegram_chat": {
+      "tools": [
+        "get_telegram_chat"
+      ]
+    },
+    "send_telegram_message": {
+      "tools": [
+        "send_telegram_message"
+      ]
+    }
+  }
+}
