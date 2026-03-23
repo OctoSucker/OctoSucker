@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/OctoSucker/agent/internal/runtime/store"
+	rtutils "github.com/OctoSucker/agent/utils"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
@@ -13,13 +15,8 @@ const replanScoreThreshold = 0.55
 const maxReplanRounds = 2
 const trajSystem = `You are a trajectory critic. Given the plan steps and execution trace, reply in 2-4 sentences: overall quality, any concern, whether safe to show the user. No JSON.`
 
-type SessionRepository interface {
-	Get(id string) (*ports.Session, bool)
-	Put(sess *ports.Session) error
-}
-
 type TrajectoryCritic struct {
-	Sessions      SessionRepository
+	Sessions      *store.SessionStore
 	TrajectoryLLM *llmclient.OpenAI
 }
 
@@ -110,7 +107,7 @@ func (c *TrajectoryCritic) HandleTrajectoryCheck(ctx context.Context, evt ports.
 	if err := c.Sessions.Put(sess); err != nil {
 		return nil, err
 	}
-	if sess.ReplanAllowed && sess.ReplanCount < maxReplanRounds && score < replanScoreThreshold && anyTraceFail(sess.Trace) {
+	if sess.ReplanAllowed && sess.ReplanCount < maxReplanRounds && score < replanScoreThreshold && rtutils.TraceHasFailure(sess.Trace) {
 		sess.ReplanCount++
 		sess.UserInput = sess.UserInput + fmt.Sprintf("\n\n[系统：上轮轨迹评分 %.2f，存在失败步骤。请生成更短、更保守的计划。]", float64(score))
 		if err := c.Sessions.Put(sess); err != nil {
@@ -119,13 +116,4 @@ func (c *TrajectoryCritic) HandleTrajectoryCheck(ctx context.Context, evt ports.
 		return []ports.Event{{Type: ports.EvUserInput, Payload: ports.PayloadUserInput{SessionID: pl.SessionID, Text: sess.UserInput, AutoReplan: true}}}, nil
 	}
 	return []ports.Event{{Type: ports.EvTurnFinalized, Payload: ports.PayloadTurnFinalized{SessionID: pl.SessionID}}}, nil
-}
-
-func anyTraceFail(tr []ports.StepTrace) bool {
-	for i := range tr {
-		if !tr[i].OK {
-			return true
-		}
-	}
-	return false
 }

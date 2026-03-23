@@ -6,20 +6,18 @@ import (
 	"maps"
 	"sort"
 
+	"github.com/OctoSucker/agent/internal/runtime/store"
+	rtutils "github.com/OctoSucker/agent/utils"
+	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 	"golang.org/x/sync/errgroup"
 )
 
-type CapabilityTools interface {
-	FirstTool(capID string) string
-	Tools(capID string) []string
-}
-
 type PlanExecutor struct {
-	Sessions    FullSessionRepository
-	RouteGraph  RouteGraph
-	CapRegistry CapabilityTools
-	MCPRouter   ToolInvoker
+	Sessions    *store.SessionStore
+	RouteGraph  *store.RoutingGraph
+	CapRegistry *store.CapabilityRegistry
+	MCPRouter   *mcpclient.MCPRouter
 }
 
 type stepWaveResult struct {
@@ -60,7 +58,7 @@ func (x *PlanExecutor) HandlePlanProgress(ctx context.Context, evt ports.Event) 
 		if !ok || sess.Plan == nil {
 			return nil, nil
 		}
-		st := findPlanStep(sess.Plan, pl.StepID)
+		st := rtutils.FindPlanStep(sess.Plan, pl.StepID)
 		if st == nil {
 			return nil, nil
 		}
@@ -75,25 +73,6 @@ func (x *PlanExecutor) HandlePlanProgress(ctx context.Context, evt ports.Event) 
 	default:
 		return nil, nil
 	}
-}
-
-func routingGroups(routeMode ports.RouteMode, frontier, skillPath, skillPrior []string) [][]string {
-	if routeMode == ports.RouteGraph {
-		return [][]string{frontier, skillPath, skillPrior}
-	}
-	return [][]string{skillPath, skillPrior, frontier}
-}
-
-func findPlanStep(p *ports.Plan, stepID string) *ports.PlanStep {
-	if p == nil {
-		return nil
-	}
-	for i := range p.Steps {
-		if p.Steps[i].ID == stepID {
-			return &p.Steps[i]
-		}
-	}
-	return nil
 }
 
 func (x *PlanExecutor) resolvePlanCapability(ctx context.Context, snap ports.RouteSnap, want, exclude string) string {
@@ -120,7 +99,7 @@ func (x *PlanExecutor) resolvePlanCapability(ctx context.Context, snap ports.Rou
 	if filter(want) {
 		return want
 	}
-	for _, g := range routingGroups(snap.RouteMode, frontier, snap.Preferred, snap.SkillPrior) {
+	for _, g := range rtutils.RouteSearchGroups(snap.RouteMode, frontier, snap.Preferred, snap.SkillPrior) {
 		for _, c := range g {
 			if filter(c) {
 				return c
@@ -139,7 +118,7 @@ func (x *PlanExecutor) resolvePlanCapability(ctx context.Context, snap ports.Rou
 }
 
 func (x *PlanExecutor) startPlanStep(ctx context.Context, sess *ports.Session, stepID string) ([]ports.Event, error) {
-	st := findPlanStep(sess.Plan, stepID)
+	st := rtutils.FindPlanStep(sess.Plan, stepID)
 	if st == nil {
 		return nil, nil
 	}

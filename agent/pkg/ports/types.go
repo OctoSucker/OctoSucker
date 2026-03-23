@@ -4,11 +4,6 @@ import (
 	"fmt"
 )
 
-type ToolCall struct {
-	Name      string
-	Arguments map[string]any
-}
-
 type ToolResult struct {
 	OK     bool
 	Output any

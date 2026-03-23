@@ -3,20 +3,13 @@ package memory
 import (
 	"context"
 
+	"github.com/OctoSucker/agent/internal/runtime/store"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
-type SessionRepository interface {
-	Get(id string) (*ports.Session, bool)
-}
-
-type RecallStore interface {
-	Write(ctx context.Context, text string) error
-}
-
 type RecallArchiver struct {
-	Sessions SessionRepository
-	Recall   RecallStore
+	Sessions *store.SessionStore
+	Recall   *store.RecallCorpus
 }
 
 func (r *RecallArchiver) ArchiveRecall(ctx context.Context, evt ports.Event) error {

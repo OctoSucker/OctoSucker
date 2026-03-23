@@ -2,46 +2,18 @@ package evaluation
 
 import (
 	"context"
-	"maps"
 
+	"github.com/OctoSucker/agent/internal/runtime/store"
+	rtutils "github.com/OctoSucker/agent/utils"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
-type FullSessionRepository interface {
-	Get(id string) (*ports.Session, bool)
-	Put(sess *ports.Session) error
-}
-
-type RouteGraph interface {
-	RecordTransition(ctx context.Context, rc ports.RoutingContext, from, to string, outcome int) error
-	Frontier(ctx context.Context, rc ports.RoutingContext, last string, outcome int) ([]string, error)
-	EntryNodes(ctx context.Context, rc ports.RoutingContext) ([]string, error)
-}
-
-type CapabilityRegistry interface {
-	FirstTool(capID string) string
-}
-
 type StepCritic struct {
-	Sessions        FullSessionRepository
-	RouteGraph      RouteGraph
-	CapRegistry     CapabilityRegistry
+	Sessions        *store.SessionStore
+	RouteGraph      *store.RoutingGraph
+	CapRegistry     *store.CapabilityRegistry
 	MaxFailsPerTool int
 }
-
-func stepArgumentsFromPlan(sess *ports.Session, stepID string) map[string]any {
-	if sess == nil || sess.Plan == nil {
-		return nil
-	}
-	for i := range sess.Plan.Steps {
-		if sess.Plan.Steps[i].ID == stepID {
-			return maps.Clone(sess.Plan.Steps[i].Arguments)
-		}
-	}
-	return nil
-}
-
-func failKey(stepID, tool string) string { return stepID + "\x1e" + tool }
 
 func (x *StepCritic) maxStepToolFails() int {
 	if x.MaxFailsPerTool <= 0 {
@@ -60,7 +32,7 @@ func (x *StepCritic) HandleObservationReady(ctx context.Context, evt ports.Event
 	sess.StepID = pl.StepID
 	sess.Trace = append(sess.Trace, ports.StepTrace{StepID: pl.StepID, Tool: pl.Tool, OK: obs.Err == nil, Summary: obs.Summary})
 	if obs.Err == nil && sess.ToolFailCount != nil {
-		delete(sess.ToolFailCount, failKey(pl.StepID, pl.Tool))
+		delete(sess.ToolFailCount, rtutils.ToolFailCountKey(pl.StepID, pl.Tool))
 	}
 	if pl.StepID == sess.CapChainStepID && len(sess.CapChainTools) > 1 {
 		if obs.Err != nil {
@@ -69,7 +41,7 @@ func (x *StepCritic) HandleObservationReady(ctx context.Context, evt ports.Event
 				if err := x.Sessions.Put(sess); err != nil {
 					return nil, err
 				}
-				return []ports.Event{{Type: ports.EvToolCall, Payload: ports.PayloadToolCall{SessionID: pl.SessionID, StepID: pl.StepID, Capability: pl.Capability, Tool: pl.Tool, Arguments: stepArgumentsFromPlan(sess, pl.StepID)}}}, nil
+				return []ports.Event{{Type: ports.EvToolCall, Payload: ports.PayloadToolCall{SessionID: pl.SessionID, StepID: pl.StepID, Capability: pl.Capability, Tool: pl.Tool, Arguments: rtutils.PlanStepArguments(sess, pl.StepID)}}}, nil
 			}
 			outcome := 1
 			if x.RouteGraph != nil {
@@ -104,7 +76,7 @@ func (x *StepCritic) HandleObservationReady(ctx context.Context, evt ports.Event
 			if err := x.Sessions.Put(sess); err != nil {
 				return nil, err
 			}
-			return []ports.Event{{Type: ports.EvToolCall, Payload: ports.PayloadToolCall{SessionID: pl.SessionID, StepID: pl.StepID, Capability: pl.Capability, Tool: sess.PendingTool, Arguments: stepArgumentsFromPlan(sess, pl.StepID)}}}, nil
+			return []ports.Event{{Type: ports.EvToolCall, Payload: ports.PayloadToolCall{SessionID: pl.SessionID, StepID: pl.StepID, Capability: pl.Capability, Tool: sess.PendingTool, Arguments: rtutils.PlanStepArguments(sess, pl.StepID)}}}, nil
 		}
 		sess.LastStepDecision = &ports.Decision{Action: ports.ActionAccept, Reason: "chain done"}
 		sess.CapChainStepID, sess.CapChainTools, sess.CapChainNext = "", nil, 0
@@ -114,7 +86,7 @@ func (x *StepCritic) HandleObservationReady(ctx context.Context, evt ports.Event
 			if err := x.Sessions.Put(sess); err != nil {
 				return nil, err
 			}
-			return []ports.Event{{Type: ports.EvToolCall, Payload: ports.PayloadToolCall{SessionID: pl.SessionID, StepID: pl.StepID, Capability: pl.Capability, Tool: pl.Tool, Arguments: stepArgumentsFromPlan(sess, pl.StepID)}}}, nil
+			return []ports.Event{{Type: ports.EvToolCall, Payload: ports.PayloadToolCall{SessionID: pl.SessionID, StepID: pl.StepID, Capability: pl.Capability, Tool: pl.Tool, Arguments: rtutils.PlanStepArguments(sess, pl.StepID)}}}, nil
 		}
 		if alt := x.trySwitchCapability(ctx, sess, pl.Capability); alt != "" {
 			sess.LastStepDecision = &ports.Decision{Action: ports.ActionSwitchCapability, Reason: "single tool fail, try other capability"}
@@ -153,7 +125,7 @@ func (x *StepCritic) shouldRetryTool(sess *ports.Session, pl ports.PayloadObserv
 	if sess.ToolFailCount == nil {
 		sess.ToolFailCount = make(map[string]int)
 	}
-	k := failKey(pl.StepID, pl.Tool)
+	k := rtutils.ToolFailCountKey(pl.StepID, pl.Tool)
 	sess.ToolFailCount[k]++
 	return sess.ToolFailCount[k] < x.maxStepToolFails()
 }

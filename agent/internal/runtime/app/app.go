@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 
 	"github.com/OctoSucker/agent/internal/config"
 	"github.com/OctoSucker/agent/internal/runtime/engine"
+	"github.com/OctoSucker/agent/internal/runtime/store"
 	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/telegram"
 )
@@ -16,10 +18,11 @@ type App struct {
 
 	Telegram   *telegram.Ingress
 	HTTPServer *http.Server
+	dataDB     *sql.DB
 	shutdown   func()
 }
 
-func NewFromWorkspace(ctx context.Context, cfg *config.Workspace) (*App, error) {
+func NewFromWorkspace(ctx context.Context, workspaceRoot string, cfg *config.Workspace) (*App, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("octoplus: workspace config required")
 	}
@@ -38,13 +41,23 @@ func NewFromWorkspace(ctx context.Context, cfg *config.Workspace) (*App, error) 
 		shutdown()
 		return nil, fmt.Errorf("octoplus: MCP exposed no tools; ensure list_tools returns tools")
 	}
-	d := engine.NewDispatcher(500, mcpRouter, caps, cfg.OpenAI)
+
+	dataDB, err := store.OpenAgentDB(workspaceRoot)
+	if err != nil {
+		shutdown()
+		return nil, fmt.Errorf("octoplus: sqlite: %w", err)
+	}
+
+	d := engine.NewDispatcher(500, mcpRouter, caps, cfg.OpenAI, dataDB)
 	telegram, err := telegram.NewIngress(cfg.Telegram.BotToken, cfg.Telegram.DefaultChatID, cfg.Telegram.AllowedChatIDs)
 	if err != nil {
+		_ = dataDB.Close()
+		shutdown()
 		return nil, fmt.Errorf("octoplus: telegram ingress: %w", err)
 	}
 	a := &App{
 		Dispatcher: d,
+		dataDB:     dataDB,
 		shutdown:   shutdown,
 		Telegram:   telegram,
 	}
@@ -54,6 +67,10 @@ func NewFromWorkspace(ctx context.Context, cfg *config.Workspace) (*App, error) 
 }
 
 func (a *App) Close() {
+	if a != nil && a.dataDB != nil {
+		_ = a.dataDB.Close()
+		a.dataDB = nil
+	}
 	if a != nil && a.shutdown != nil {
 		a.shutdown()
 		a.shutdown = nil

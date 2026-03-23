@@ -8,23 +8,10 @@ import (
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
-type SessionRepository interface {
-	Get(id string) (*ports.Session, bool)
-}
-
-type SkillStore interface {
-	RecordTurn(userText string, success bool, queryEmbedding []float32, minEmbeddingSim float64, activeSkillName, activeVariantID string)
-	MergeOrAdd(e store.SkillEntry)
-}
-
-type RouteGraphStore interface {
-	RecordTrajectory(path []ports.TransitionStep, score float64, success bool)
-}
-
 type Learner struct {
-	Sessions              SessionRepository
-	Skills                SkillStore
-	RouteGraph            RouteGraphStore
+	Sessions              *store.SessionStore
+	Skills                *store.SkillRegistry
+	RouteGraph            *store.RoutingGraph
 	Embedder              *llmclient.OpenAI
 	SkillRouteThreshold   float64
 	ExtractScoreThreshold float64

@@ -38,7 +38,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "octoplushttp:", err)
 		os.Exit(1)
 	}
-	a, err := app.NewFromWorkspace(ctx, cfg)
+	a, err := app.NewFromWorkspace(ctx, wsRoot, cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "octoplushttp:", err)
 		os.Exit(1)

@@ -16,33 +16,13 @@ import (
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
-type SessionRepository interface {
-	Get(id string) (*ports.Session, bool)
-	Put(sess *ports.Session) error
-}
-
-type RouteGraphWithConfidence interface {
-	Confidence(ctx context.Context, rc ports.RoutingContext, last string) float64
-}
-
-type PlannerSkillStore interface {
-	Match(userText string) []string
-	MatchByEmbedding(embedding []float32, k int) []store.SkillEntry
-	KeywordPlanEntry(userText string) (store.SkillEntry, bool)
-	MarkUsed(name string)
-}
-
-type RecallWithRead interface {
-	Recall(ctx context.Context, query string, k int) ([]string, error)
-}
-
 type Planner struct {
 	Router                *decision.Router
-	Sessions              SessionRepository
-	RouteGraph            RouteGraphWithConfidence
-	Skills                PlannerSkillStore
+	Sessions              *store.SessionStore
+	RouteGraph            *store.RoutingGraph
+	Skills                *store.SkillRegistry
 	Embedder              *llmclient.OpenAI
-	RecallCorpus          RecallWithRead
+	RecallCorpus          *store.RecallCorpus
 	PlannerLLM            *llmclient.OpenAI
 	PlanSystemPrompt      string
 	ValidPlanCapabilities map[string]ports.Capability

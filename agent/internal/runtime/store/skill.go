@@ -2,15 +2,13 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"maps"
+	"database/sql"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	rtutils "github.com/OctoSucker/agent/utils"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
@@ -80,10 +78,15 @@ func (e SkillEntry) PreferredPath() []string {
 type SkillRegistry struct {
 	mu      sync.RWMutex
 	entries []SkillEntry
+	db      *sql.DB
 }
 
-func NewSkillRegistry() *SkillRegistry {
-	return &SkillRegistry{}
+func NewSkillRegistry(db *sql.DB) *SkillRegistry {
+	r := &SkillRegistry{entries: []SkillEntry{}, db: db}
+	if db != nil {
+		_ = r.loadSkillsFromDB()
+	}
+	return r
 }
 
 func (r *SkillRegistry) Register(e SkillEntry) {
@@ -93,6 +96,7 @@ func (r *SkillRegistry) Register(e SkillEntry) {
 	e.MatchScore = 0
 	e.SelectedVariantID = ""
 	r.entries = append(r.entries, e)
+	r.persistSkillsDBLocked()
 }
 
 func (r *SkillRegistry) MergeOrAdd(e SkillEntry) {
@@ -102,7 +106,7 @@ func (r *SkillRegistry) MergeOrAdd(e SkillEntry) {
 	e.MatchScore = 0
 	e.SelectedVariantID = ""
 	for i := range r.entries {
-		if capabilitySliceEqual(r.entries[i].Capabilities, e.Capabilities) {
+		if rtutils.StringSlicesEqual(r.entries[i].Capabilities, e.Capabilities) {
 			r.entries[i].Attempts += e.Attempts
 			r.entries[i].Successes += e.Successes
 			if len(e.TriggerEmbedding) > 0 {
@@ -111,10 +115,12 @@ func (r *SkillRegistry) MergeOrAdd(e SkillEntry) {
 			for _, nv := range e.Variants {
 				mergeSkillVariant(&r.entries[i], nv)
 			}
+			r.persistSkillsDBLocked()
 			return
 		}
 	}
 	r.entries = append(r.entries, e)
+	r.persistSkillsDBLocked()
 }
 
 func mergeSkillVariant(skill *SkillEntry, nv SkillPlanVariant) {
@@ -148,40 +154,7 @@ func (r *SkillRegistry) MarkUsed(name string) {
 			break
 		}
 	}
-}
-
-func hashCapabilities(caps []string) string {
-	h := sha256.Sum256([]byte(strings.Join(caps, "|")))
-	return hex.EncodeToString(h[:])[:8]
-}
-
-// planFingerprint stable hash over plan semantics (steps + deps + arguments).
-func planFingerprint(p *ports.Plan) string {
-	if p == nil || len(p.Steps) == 0 {
-		return ""
-	}
-	type sigStep struct {
-		ID         string         `json:"id"`
-		Capability string         `json:"capability"`
-		Goal       string         `json:"goal"`
-		DependsOn  []string       `json:"depends_on"`
-		Arguments  map[string]any `json:"arguments,omitempty"`
-	}
-	steps := make([]sigStep, len(p.Steps))
-	for i, st := range p.Steps {
-		dep := append([]string(nil), st.DependsOn...)
-		sort.Strings(dep)
-		steps[i] = sigStep{
-			ID: st.ID, Capability: st.Capability, Goal: st.Goal,
-			DependsOn: dep, Arguments: maps.Clone(st.Arguments),
-		}
-	}
-	b, err := json.Marshal(steps)
-	if err != nil {
-		return ""
-	}
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:])[:12]
+	r.persistSkillsDBLocked()
 }
 
 func BuildSkillEntryFromSession(ctx context.Context, sess *ports.Session, embedder *llmclient.OpenAI) (SkillEntry, bool) {
@@ -197,7 +170,7 @@ func BuildSkillEntryFromSession(ctx context.Context, sess *ports.Session, embedd
 	if len(caps) == 0 {
 		return SkillEntry{}, false
 	}
-	fp := planFingerprint(sess.Plan)
+	fp := rtutils.PlanSemanticFingerprint(sess.Plan)
 	if fp == "" {
 		return SkillEntry{}, false
 	}
@@ -206,7 +179,7 @@ func BuildSkillEntryFromSession(ctx context.Context, sess *ports.Session, embedd
 		emb, _ = embedder.Embed(ctx, sess.UserInput)
 	}
 	return SkillEntry{
-		Name:             "learned_" + hashCapabilities(caps),
+		Name:             "learned_" + rtutils.HashPipeJoinedCapabilities(caps),
 		Capabilities:     caps,
 		Path:             append([]string(nil), caps...),
 		TriggerEmbedding: emb,
@@ -291,7 +264,7 @@ func (r *SkillRegistry) MatchByEmbedding(embedding []float32, k int) []SkillEntr
 		if bi < 0 {
 			continue
 		}
-		sim := cosine(embedding, e.TriggerEmbedding)
+		sim := rtutils.CosineFloat32(embedding, e.TriggerEmbedding)
 		list = append(list, scored{e, sim})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].score > list[j].score })
@@ -311,6 +284,7 @@ func (r *SkillRegistry) MatchByEmbedding(embedding []float32, k int) []SkillEntr
 func (r *SkillRegistry) RecordTurn(userText string, success bool, queryEmbedding []float32, minEmbeddingSim float64, activeSkillName, activeVariantID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	defer r.persistSkillsDBLocked()
 
 	if activeSkillName != "" && activeVariantID != "" {
 		for i := range r.entries {
@@ -361,7 +335,7 @@ func (r *SkillRegistry) RecordTurn(userText string, success bool, queryEmbedding
 		if updated[i] || len(r.entries[i].TriggerEmbedding) == 0 {
 			continue
 		}
-		sim := cosine(queryEmbedding, r.entries[i].TriggerEmbedding)
+		sim := rtutils.CosineFloat32(queryEmbedding, r.entries[i].TriggerEmbedding)
 		if sim < minEmbeddingSim {
 			continue
 		}
@@ -376,18 +350,6 @@ func (r *SkillRegistry) RecordTurn(userText string, success bool, queryEmbedding
 			r.entries[bestI].Successes++
 		}
 	}
-}
-
-func capabilitySliceEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func pathOrCaps(e SkillEntry) []string {
