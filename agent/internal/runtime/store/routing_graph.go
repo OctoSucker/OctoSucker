@@ -2,12 +2,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"math"
 	"sort"
-	"strings"
 	"sync"
-	"unicode"
 
+	rtutils "github.com/OctoSucker/agent/utils"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
@@ -20,6 +20,7 @@ type RoutingGraph struct {
 	static            map[string][]string
 	recentTransitions []contextTransition
 	totalRuns         int64
+	db                *sql.DB
 }
 
 type EdgeStat struct {
@@ -48,7 +49,7 @@ type portsEdge struct {
 	Latency float64
 }
 
-func NewRoutingGraphFromCapabilities(m map[string]ports.Capability) *RoutingGraph {
+func NewRoutingGraphFromCapabilities(m map[string]ports.Capability, db *sql.DB) *RoutingGraph {
 	ids := make([]string, 0, len(m))
 	for id := range m {
 		ids = append(ids, id)
@@ -68,7 +69,11 @@ func NewRoutingGraphFromCapabilities(m map[string]ports.Capability) *RoutingGrap
 			static[id] = []string{}
 		}
 	}
-	return &RoutingGraph{edges: make(map[edgeKey]*portsEdge), static: static}
+	g := &RoutingGraph{edges: make(map[edgeKey]*portsEdge), static: static, db: db}
+	if db != nil {
+		_ = g.loadFromDB()
+	}
+	return g
 }
 
 func (s *RoutingGraph) Confidence(ctx context.Context, rc ports.RoutingContext, last string) float64 {
@@ -202,7 +207,7 @@ func (s *RoutingGraph) similarIntentScoreLocked(intent, from, to string) float64
 	if intent == "" || len(s.recentTransitions) == 0 {
 		return 0
 	}
-	iw := intentWords(intent)
+	iw := rtutils.RoutingIntentWordSet(intent)
 	if len(iw) == 0 {
 		return 0
 	}
@@ -211,8 +216,8 @@ func (s *RoutingGraph) similarIntentScoreLocked(intent, from, to string) float64
 		if t.From != from || t.To != to {
 			continue
 		}
-		tw := intentWords(t.Intent)
-		if wordOverlap(iw, tw) < 0.2 {
+		tw := rtutils.RoutingIntentWordSet(t.Intent)
+		if rtutils.RoutingWordOverlapRatio(iw, tw) < 0.2 {
 			continue
 		}
 		total++
@@ -255,6 +260,7 @@ func (s *RoutingGraph) RecordTransition(ctx context.Context, rc ports.RoutingCon
 	if len(s.recentTransitions) > recentTransitionsCap {
 		s.recentTransitions = s.recentTransitions[len(s.recentTransitions)-recentTransitionsCap:]
 	}
+	s.persistEdgeAndRecentLocked(k, e)
 	return nil
 }
 
@@ -266,6 +272,7 @@ func (s *RoutingGraph) RestoreEdges(edges []EdgeStat) {
 		k := edgeKey{from: e.From, to: e.To}
 		s.edges[k] = &portsEdge{Success: float64(e.Success), Failure: float64(e.Failure)}
 	}
+	s.persistAllEdgesLocked()
 }
 
 func (s *RoutingGraph) RecordTrajectory(path []ports.TransitionStep, score float64, success bool) {
@@ -289,6 +296,7 @@ func (s *RoutingGraph) RecordTrajectory(path []ports.TransitionStep, score float
 			e.Failure += w
 		}
 	}
+	s.persistTrajectoryLocked(path)
 }
 
 func (s *RoutingGraph) ListEdges() []EdgeStat {
@@ -315,28 +323,4 @@ func (s *RoutingGraph) StaticTopology() map[string][]string {
 		m[k] = append([]string(nil), v...)
 	}
 	return m
-}
-
-func intentWords(t string) map[string]struct{} {
-	m := make(map[string]struct{})
-	f := func(r rune) bool { return unicode.IsSpace(r) || r == ',' || r == '.' }
-	for _, w := range strings.FieldsFunc(strings.ToLower(t), f) {
-		if len(w) >= 2 {
-			m[w] = struct{}{}
-		}
-	}
-	return m
-}
-
-func wordOverlap(a, b map[string]struct{}) float64 {
-	if len(a) == 0 {
-		return 0
-	}
-	n := 0
-	for k := range a {
-		if _, ok := b[k]; ok {
-			n++
-		}
-	}
-	return float64(n) / float64(len(a))
 }

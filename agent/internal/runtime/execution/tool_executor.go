@@ -4,20 +4,14 @@ import (
 	"context"
 	"maps"
 
+	"github.com/OctoSucker/agent/internal/runtime/store"
+	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
-type SessionRepository interface {
-	Get(id string) (*ports.Session, bool)
-}
-
-type ToolInvoker interface {
-	Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error)
-}
-
 type ToolExecutor struct {
-	Sessions SessionRepository
-	Invoker  ToolInvoker
+	Sessions *store.SessionStore
+	Invoker  *mcpclient.MCPRouter
 }
 
 func (x *ToolExecutor) HandleToolCall(ctx context.Context, evt ports.Event) ([]ports.Event, error) {

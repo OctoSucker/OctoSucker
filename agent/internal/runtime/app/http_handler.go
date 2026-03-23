@@ -4,17 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
+	rtutils "github.com/OctoSucker/agent/utils"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
-
-func normalizeHTTPSessionID(s string) string {
-	if strings.HasPrefix(s, "http-") {
-		return s
-	}
-	return "http-" + s
-}
 
 type runRequest struct {
 	SessionID string `json:"session_id"`
@@ -77,20 +70,20 @@ func (a *App) HTTPHandler() http.Handler {
 	m.HandleFunc("POST /session/{id}/rerun", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if id == "" {
-			writeJSON(w, http.StatusBadRequest, errResponse{Error: "session id required"})
+			rtutils.WriteJSON(w, http.StatusBadRequest, errResponse{Error: "session id required"})
 			return
 		}
 		reply, err := a.RerunSessionPlan(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, ErrRerunNoPlan) {
-				writeJSON(w, http.StatusNotFound, errResponse{Error: err.Error()})
+				rtutils.WriteJSON(w, http.StatusNotFound, errResponse{Error: err.Error()})
 				return
 			}
-			writeJSON(w, http.StatusInternalServerError, errResponse{Error: err.Error()})
+			rtutils.WriteJSON(w, http.StatusInternalServerError, errResponse{Error: err.Error()})
 			return
 		}
 		sess, _ := a.Dispatcher.Sessions.Get(id)
-		writeJSON(w, http.StatusOK, map[string]any{
+		rtutils.WriteJSON(w, http.StatusOK, map[string]any{
 			"reply": reply, "session_id": id,
 			"trajectory_score": float64(sess.TrajectoryScore), "trajectory_summary": sess.TrajectorySummary,
 		})
@@ -98,12 +91,12 @@ func (a *App) HTTPHandler() http.Handler {
 	m.HandleFunc("GET /session/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if id == "" {
-			writeJSON(w, http.StatusBadRequest, errResponse{Error: "session id required"})
+			rtutils.WriteJSON(w, http.StatusBadRequest, errResponse{Error: "session id required"})
 			return
 		}
 		sess, ok := a.Dispatcher.Sessions.Get(id)
 		if !ok {
-			writeJSON(w, http.StatusNotFound, errResponse{Error: "not found"})
+			rtutils.WriteJSON(w, http.StatusNotFound, errResponse{Error: "not found"})
 			return
 		}
 		out := sessionResponse{
@@ -134,30 +127,30 @@ func (a *App) HTTPHandler() http.Handler {
 				})
 			}
 		}
-		writeJSON(w, http.StatusOK, out)
+		rtutils.WriteJSON(w, http.StatusOK, out)
 	})
 	m.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
 		var req runRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, errResponse{Error: "invalid json"})
+			rtutils.WriteJSON(w, http.StatusBadRequest, errResponse{Error: "invalid json"})
 			return
 		}
 		if req.SessionID == "" {
-			writeJSON(w, http.StatusBadRequest, errResponse{Error: "session_id required"})
+			rtutils.WriteJSON(w, http.StatusBadRequest, errResponse{Error: "session_id required"})
 			return
 		}
-		sid := normalizeHTTPSessionID(req.SessionID)
+		sid := rtutils.HTTPNormalizeChatSessionID(req.SessionID)
 		reply, err := a.RunInput(r.Context(), sid, req.Text)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, errResponse{Error: err.Error()})
+			rtutils.WriteJSON(w, http.StatusInternalServerError, errResponse{Error: err.Error()})
 			return
 		}
 		sess, ok := a.Dispatcher.Sessions.Get(sid)
 		if !ok {
-			writeJSON(w, http.StatusInternalServerError, errResponse{Error: "session missing"})
+			rtutils.WriteJSON(w, http.StatusInternalServerError, errResponse{Error: "session missing"})
 			return
 		}
-		writeJSON(w, http.StatusOK, runResponse{
+		rtutils.WriteJSON(w, http.StatusOK, runResponse{
 			Reply:             reply,
 			SessionID:         sid,
 			TrajectoryScore:   float64(sess.TrajectoryScore),
@@ -165,10 +158,4 @@ func (a *App) HTTPHandler() http.Handler {
 		})
 	})
 	return m
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }

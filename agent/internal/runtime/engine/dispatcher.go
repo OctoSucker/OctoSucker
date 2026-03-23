@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"sort"
@@ -60,11 +61,11 @@ type AgentBrain struct {
 	TrajectoryCritic      *evaluation.TrajectoryCritic
 	Learner               *learning.Learner
 	RecallArchiver        *memory.RecallArchiver
-	Sessions              SessionRepository
-	RouteGraph            RouteGraphStore
-	Skills                SkillStore
+	Sessions              *store.SessionStore
+	RouteGraph            *store.RoutingGraph
+	Skills                *store.SkillRegistry
 	Embedder              *llmclient.OpenAI
-	RecallCorpus          RecallStore
+	RecallCorpus          *store.RecallCorpus
 	PlannerLLM            *llmclient.OpenAI
 	TrajectoryLLM         *llmclient.OpenAI
 	PlanSystemPrompt      string
@@ -80,10 +81,10 @@ type AgentBrain struct {
 type AgentExecutor struct {
 	ToolExec        *execution.ToolExecutor
 	PlanExec        *execution.PlanExecutor
-	Sessions        SessionRepository
-	RouteGraph      RouteGraphStore
-	CapRegistry     CapabilityStore
-	MCPRouter       ToolInvoker
+	Sessions        *store.SessionStore
+	RouteGraph      *store.RoutingGraph
+	CapRegistry     *store.CapabilityRegistry
+	MCPRouter       *mcpclient.MCPRouter
 	MaxFailsPerTool int
 }
 
@@ -117,17 +118,18 @@ func NewDispatcher(
 	mcpRouter *mcpclient.MCPRouter,
 	capabilities map[string]ports.Capability,
 	openai config.OpenAI,
+	sqlDB *sql.DB,
 ) *Dispatcher {
 
-	sessions := store.NewSessionStore()
-	routeGraph := store.NewRoutingGraphFromCapabilities(capabilities)
-	skills := store.NewSkillRegistry()
+	sessions := store.NewSessionStore(sqlDB)
+	routeGraph := store.NewRoutingGraphFromCapabilities(capabilities, sqlDB)
+	skills := store.NewSkillRegistry(sqlDB)
 	o := openai
 	plannerLLM := llmclient.NewOpenAI(o.BaseURL, o.APIKey, o.Model, o.EmbeddingModel)
 	embedder := llmclient.NewOpenAI(o.BaseURL, o.APIKey, o.Model, o.EmbeddingModel)
 	trajectoryLLM := llmclient.NewOpenAI(o.BaseURL, o.APIKey, o.Model, o.EmbeddingModel)
-	recallCorpus := store.NewRecallCorpus(embedder)
-	capReg := store.NewCapabilityRegistryFromCapabilities(capabilities)
+	recallCorpus := store.NewRecallCorpus(embedder, sqlDB)
+	capReg := store.NewCapabilityRegistryFromCapabilities(capabilities, sqlDB)
 
 	toolApp := ""
 	schemaByTool := map[string]any{}
