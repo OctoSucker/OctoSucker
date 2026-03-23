@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -13,17 +15,32 @@ import (
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
+// SkillPlanVariant is one executable plan bound to the same capability sequence (macro skill).
+// Multiple variants allow skill evolution without overwriting a previously learned plan.
+type SkillPlanVariant struct {
+	ID        string
+	Plan      *ports.Plan
+	Attempts  int
+	Successes int
+}
+
+// SkillEntry groups a trigger, a capability procedure, and zero or more plan variants.
 type SkillEntry struct {
-	Name             string
-	Keywords         []string
-	Capabilities     []string
-	Path             []string
-	Plan             *ports.Plan
+	Name         string
+	Keywords     []string
+	Capabilities []string
+	Path         []string
+	// TriggerEmbedding is matched against the user query embedding (learned / optional static).
 	TriggerEmbedding []float32
-	Attempts         int
-	Successes        int
-	LastUsedAt       time.Time
-	MatchScore       float64
+	Variants         []SkillPlanVariant
+	// Attempts/Successes are skill-level counters (keyword hits, implicit embedding reinforcement,
+	// and attributed turns). Variant-level stats live on SkillPlanVariant.
+	Attempts   int
+	Successes  int
+	LastUsedAt time.Time
+	MatchScore float64
+	// SelectedVariantID is set only on routing snapshots returned to the planner (not stored in registry).
+	SelectedVariantID string `json:"-"`
 }
 
 func (e SkillEntry) SuccessRate() float64 {
@@ -35,6 +52,29 @@ func (e SkillEntry) SuccessRate() float64 {
 
 func (e SkillEntry) tooPoorForMatch() bool {
 	return e.Attempts > 5 && e.SuccessRate() < 0.3
+}
+
+// SelectedPlan returns a deep copy of the plan for the selected or best-scoring variant.
+func (e SkillEntry) SelectedPlan() *ports.Plan {
+	if len(e.Variants) == 0 {
+		return nil
+	}
+	if e.SelectedVariantID != "" {
+		for i := range e.Variants {
+			if e.Variants[i].ID == e.SelectedVariantID {
+				return CloneSkillPlan(e.Variants[i].Plan)
+			}
+		}
+	}
+	bi := bestVariantIndex(e.Variants)
+	if bi < 0 {
+		return nil
+	}
+	return CloneSkillPlan(e.Variants[bi].Plan)
+}
+
+func (e SkillEntry) PreferredPath() []string {
+	return pathOrCaps(e)
 }
 
 type SkillRegistry struct {
@@ -49,14 +89,18 @@ func NewSkillRegistry() *SkillRegistry {
 func (r *SkillRegistry) Register(e SkillEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	e = cloneSkillEntryForStorage(e)
 	e.MatchScore = 0
+	e.SelectedVariantID = ""
 	r.entries = append(r.entries, e)
 }
 
 func (r *SkillRegistry) MergeOrAdd(e SkillEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	e = cloneSkillEntryForStorage(e)
 	e.MatchScore = 0
+	e.SelectedVariantID = ""
 	for i := range r.entries {
 		if capabilitySliceEqual(r.entries[i].Capabilities, e.Capabilities) {
 			r.entries[i].Attempts += e.Attempts
@@ -64,13 +108,34 @@ func (r *SkillRegistry) MergeOrAdd(e SkillEntry) {
 			if len(e.TriggerEmbedding) > 0 {
 				r.entries[i].TriggerEmbedding = append([]float32(nil), e.TriggerEmbedding...)
 			}
-			if e.Plan != nil {
-				r.entries[i].Plan = CloneSkillPlan(e.Plan)
+			for _, nv := range e.Variants {
+				mergeSkillVariant(&r.entries[i], nv)
 			}
 			return
 		}
 	}
 	r.entries = append(r.entries, e)
+}
+
+func mergeSkillVariant(skill *SkillEntry, nv SkillPlanVariant) {
+	if nv.ID == "" || nv.Plan == nil {
+		return
+	}
+	for j := range skill.Variants {
+		if skill.Variants[j].ID != nv.ID {
+			continue
+		}
+		skill.Variants[j].Attempts += nv.Attempts
+		skill.Variants[j].Successes += nv.Successes
+		skill.Variants[j].Plan = CloneSkillPlan(nv.Plan)
+		return
+	}
+	skill.Variants = append(skill.Variants, SkillPlanVariant{
+		ID:        nv.ID,
+		Plan:      CloneSkillPlan(nv.Plan),
+		Attempts:  nv.Attempts,
+		Successes: nv.Successes,
+	})
 }
 
 func (r *SkillRegistry) MarkUsed(name string) {
@@ -90,6 +155,35 @@ func hashCapabilities(caps []string) string {
 	return hex.EncodeToString(h[:])[:8]
 }
 
+// planFingerprint stable hash over plan semantics (steps + deps + arguments).
+func planFingerprint(p *ports.Plan) string {
+	if p == nil || len(p.Steps) == 0 {
+		return ""
+	}
+	type sigStep struct {
+		ID         string         `json:"id"`
+		Capability string         `json:"capability"`
+		Goal       string         `json:"goal"`
+		DependsOn  []string       `json:"depends_on"`
+		Arguments  map[string]any `json:"arguments,omitempty"`
+	}
+	steps := make([]sigStep, len(p.Steps))
+	for i, st := range p.Steps {
+		dep := append([]string(nil), st.DependsOn...)
+		sort.Strings(dep)
+		steps[i] = sigStep{
+			ID: st.ID, Capability: st.Capability, Goal: st.Goal,
+			DependsOn: dep, Arguments: maps.Clone(st.Arguments),
+		}
+	}
+	b, err := json.Marshal(steps)
+	if err != nil {
+		return ""
+	}
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])[:12]
+}
+
 func BuildSkillEntryFromSession(ctx context.Context, sess *ports.Session, embedder *llmclient.OpenAI) (SkillEntry, bool) {
 	if sess == nil || sess.Plan == nil || len(sess.Plan.Steps) == 0 {
 		return SkillEntry{}, false
@@ -103,6 +197,10 @@ func BuildSkillEntryFromSession(ctx context.Context, sess *ports.Session, embedd
 	if len(caps) == 0 {
 		return SkillEntry{}, false
 	}
+	fp := planFingerprint(sess.Plan)
+	if fp == "" {
+		return SkillEntry{}, false
+	}
 	var emb []float32
 	if embedder != nil && sess.UserInput != "" {
 		emb, _ = embedder.Embed(ctx, sess.UserInput)
@@ -111,10 +209,12 @@ func BuildSkillEntryFromSession(ctx context.Context, sess *ports.Session, embedd
 		Name:             "learned_" + hashCapabilities(caps),
 		Capabilities:     caps,
 		Path:             append([]string(nil), caps...),
-		Plan:             CloneSkillPlan(sess.Plan),
 		TriggerEmbedding: emb,
-		Attempts:         1,
-		Successes:        1,
+		Variants: []SkillPlanVariant{{
+			ID: fp, Plan: CloneSkillPlan(sess.Plan), Attempts: 1, Successes: 1,
+		}},
+		Attempts:  1,
+		Successes: 1,
 	}, true
 }
 
@@ -143,10 +243,6 @@ func (r *SkillRegistry) Match(userText string) []string {
 	return out
 }
 
-func (e SkillEntry) PreferredPath() []string {
-	return pathOrCaps(e)
-}
-
 func CloneSkillPlan(p *ports.Plan) *ports.Plan {
 	if p == nil {
 		return nil
@@ -164,12 +260,12 @@ func (r *SkillRegistry) KeywordPlanEntry(userText string) (SkillEntry, bool) {
 	defer r.mu.RUnlock()
 	for i := range r.entries {
 		e := r.entries[i]
-		if e.tooPoorForMatch() || e.Plan == nil {
+		if e.tooPoorForMatch() || len(e.Variants) == 0 || bestVariantIndex(e.Variants) < 0 {
 			continue
 		}
 		for _, kw := range e.Keywords {
 			if kw != "" && strings.Contains(t, strings.ToLower(kw)) {
-				return e, true
+				return routingSnapshot(e, bestVariantIndex(e.Variants), 0), true
 			}
 		}
 	}
@@ -191,6 +287,10 @@ func (r *SkillRegistry) MatchByEmbedding(embedding []float32, k int) []SkillEntr
 		if e.tooPoorForMatch() || len(e.TriggerEmbedding) == 0 {
 			continue
 		}
+		bi := bestVariantIndex(e.Variants)
+		if bi < 0 {
+			continue
+		}
 		sim := cosine(embedding, e.TriggerEmbedding)
 		list = append(list, scored{e, sim})
 	}
@@ -201,25 +301,40 @@ func (r *SkillRegistry) MatchByEmbedding(embedding []float32, k int) []SkillEntr
 	out := make([]SkillEntry, 0, k)
 	for i := 0; i < k; i++ {
 		e := list[i].entry
-		out = append(out, SkillEntry{
-			Name:             e.Name,
-			Keywords:         append([]string(nil), e.Keywords...),
-			Capabilities:     append([]string(nil), e.Capabilities...),
-			Path:             pathOrCaps(e),
-			Plan:             CloneSkillPlan(e.Plan),
-			TriggerEmbedding: nil,
-			Attempts:         e.Attempts,
-			Successes:        e.Successes,
-			LastUsedAt:       e.LastUsedAt,
-			MatchScore:       list[i].score,
-		})
+		bi := bestVariantIndex(e.Variants)
+		out = append(out, routingSnapshot(e, bi, list[i].score))
 	}
 	return out
 }
 
-func (r *SkillRegistry) RecordTurn(userText string, success bool, queryEmbedding []float32, minEmbeddingSim float64) {
+// RecordTurn updates skill stats from keywords / embedding, or from an attributed skill+variant when provided.
+func (r *SkillRegistry) RecordTurn(userText string, success bool, queryEmbedding []float32, minEmbeddingSim float64, activeSkillName, activeVariantID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if activeSkillName != "" && activeVariantID != "" {
+		for i := range r.entries {
+			if r.entries[i].Name != activeSkillName {
+				continue
+			}
+			for j := range r.entries[i].Variants {
+				if r.entries[i].Variants[j].ID != activeVariantID {
+					continue
+				}
+				r.entries[i].Attempts++
+				if success {
+					r.entries[i].Successes++
+				}
+				r.entries[i].Variants[j].Attempts++
+				if success {
+					r.entries[i].Variants[j].Successes++
+				}
+				return
+			}
+			return
+		}
+	}
+
 	t := strings.ToLower(userText)
 	updated := make([]bool, len(r.entries))
 	for i := range r.entries {
@@ -280,4 +395,84 @@ func pathOrCaps(e SkillEntry) []string {
 		return append([]string(nil), e.Path...)
 	}
 	return append([]string(nil), e.Capabilities...)
+}
+
+func bestVariantIndex(vs []SkillPlanVariant) int {
+	if len(vs) == 0 {
+		return -1
+	}
+	best := 0
+	for i := 1; i < len(vs); i++ {
+		if variantABetter(&vs[i], &vs[best]) {
+			best = i
+		}
+	}
+	return best
+}
+
+func variantABetter(a, b *SkillPlanVariant) bool {
+	if a.Attempts == 0 && b.Attempts > 0 {
+		return false
+	}
+	if b.Attempts == 0 && a.Attempts > 0 {
+		return true
+	}
+	ra, rb := variantRate(a), variantRate(b)
+	if ra != rb {
+		return ra > rb
+	}
+	if a.Attempts != b.Attempts {
+		return a.Attempts > b.Attempts
+	}
+	return a.Successes > b.Successes
+}
+
+func variantRate(v *SkillPlanVariant) float64 {
+	if v.Attempts <= 0 {
+		return 0
+	}
+	return float64(v.Successes) / float64(v.Attempts)
+}
+
+func routingSnapshot(e SkillEntry, variantIdx int, matchScore float64) SkillEntry {
+	if variantIdx < 0 || variantIdx >= len(e.Variants) {
+		return SkillEntry{}
+	}
+	v := e.Variants[variantIdx]
+	out := SkillEntry{
+		Name:              e.Name,
+		Keywords:          append([]string(nil), e.Keywords...),
+		Capabilities:      append([]string(nil), e.Capabilities...),
+		Path:              pathOrCaps(e),
+		TriggerEmbedding:  nil,
+		Attempts:          e.Attempts,
+		Successes:         e.Successes,
+		LastUsedAt:        e.LastUsedAt,
+		MatchScore:        matchScore,
+		SelectedVariantID: v.ID,
+		Variants:          cloneVariantsDeep(e.Variants),
+	}
+	return out
+}
+
+func cloneVariantsDeep(vs []SkillPlanVariant) []SkillPlanVariant {
+	out := make([]SkillPlanVariant, len(vs))
+	for i := range vs {
+		out[i] = SkillPlanVariant{
+			ID: vs[i].ID, Attempts: vs[i].Attempts, Successes: vs[i].Successes,
+			Plan: CloneSkillPlan(vs[i].Plan),
+		}
+	}
+	return out
+}
+
+func cloneSkillEntryForStorage(e SkillEntry) SkillEntry {
+	e.MatchScore = 0
+	e.SelectedVariantID = ""
+	e.Keywords = append([]string(nil), e.Keywords...)
+	e.Capabilities = append([]string(nil), e.Capabilities...)
+	e.Path = append([]string(nil), e.Path...)
+	e.TriggerEmbedding = append([]float32(nil), e.TriggerEmbedding...)
+	e.Variants = cloneVariantsDeep(e.Variants)
+	return e
 }
