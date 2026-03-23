@@ -75,7 +75,6 @@ func (a *App) RerunSessionPlan(ctx context.Context, sessionID string) (string, e
 		return "", fmt.Errorf("app: nil dispatcher or sessions")
 	}
 	sessStore := a.Dispatcher.Sessions
-	run := a.Dispatcher.Run
 	sess, ok := sessStore.Get(sessionID)
 	if !ok || sess == nil || sess.Plan == nil {
 		return "", ErrRerunNoPlan
@@ -101,7 +100,7 @@ func (a *App) RerunSessionPlan(ctx context.Context, sessionID string) (string, e
 		return "", err
 	}
 	q := []ports.Event{{Type: ports.EvPlanCreated, Payload: ports.PayloadPlanCreated{SessionID: sessionID}}}
-	if err := run(ctx, q); err != nil {
+	if err := a.Dispatcher.Run(ctx, q); err != nil {
 		log.Printf("app.RerunSessionPlan: dispatcher error session=%s err=%v", sessionID, err)
 		return "", err
 	}

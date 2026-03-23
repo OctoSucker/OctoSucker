@@ -8,13 +8,90 @@ import (
 	"strings"
 
 	"github.com/OctoSucker/agent/internal/config"
+	"github.com/OctoSucker/agent/internal/runtime/cognition/decision"
+	"github.com/OctoSucker/agent/internal/runtime/cognition/evaluation"
+	"github.com/OctoSucker/agent/internal/runtime/cognition/learning"
+	"github.com/OctoSucker/agent/internal/runtime/cognition/memory"
+	"github.com/OctoSucker/agent/internal/runtime/cognition/planning"
+	"github.com/OctoSucker/agent/internal/runtime/execution"
 	"github.com/OctoSucker/agent/internal/runtime/store"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
+type EventHandler func(context.Context, ports.Event) ([]ports.Event, error)
+
+// AgentRuntime owns only the event-loop scheduling mechanics.
+type AgentRuntime struct {
+	MaxSteps int
+}
+
+func (r *AgentRuntime) Run(ctx context.Context, queue []ports.Event, dispatch EventHandler) error {
+	if r == nil {
+		return fmt.Errorf("engine: nil runtime")
+	}
+	if dispatch == nil {
+		return fmt.Errorf("engine: nil dispatch handler")
+	}
+	if r.MaxSteps <= 0 {
+		return fmt.Errorf("engine: MaxSteps must be > 0")
+	}
+	n := 0
+	for len(queue) > 0 && n < r.MaxSteps {
+		evt := queue[0]
+		queue = queue[1:]
+		n++
+		out, err := dispatch(ctx, evt)
+		if err != nil {
+			log.Printf("engine.AgentRuntime.Run: abort event=%s iter=%d err=%v", evt.Type, n, err)
+			return err
+		}
+		queue = append(queue, out...)
+	}
+	return nil
+}
+
+// AgentBrain collects cognitive dependencies (planning/critic/learning/memory access).
+type AgentBrain struct {
+	Router                *decision.Router
+	Planner               *planning.Planner
+	StepCritic            *evaluation.StepCritic
+	TrajectoryCritic      *evaluation.TrajectoryCritic
+	Learner               *learning.Learner
+	RecallArchiver        *memory.RecallArchiver
+	Sessions              SessionRepository
+	RouteGraph            RouteGraphStore
+	Skills                SkillStore
+	Embedder              *llmclient.OpenAI
+	RecallCorpus          RecallStore
+	PlannerLLM            *llmclient.OpenAI
+	TrajectoryLLM         *llmclient.OpenAI
+	PlanSystemPrompt      string
+	ValidPlanCapabilities map[string]ports.Capability
+	ToolAppendix          string
+	ToolInputSchemas      map[string]any
+	SkillRouteThreshold   float64
+	GraphRouteThreshold   float64
+	ExtractScoreThreshold float64
+}
+
+// AgentExecutor collects dependencies needed for plan/tool execution decisions.
+type AgentExecutor struct {
+	ToolExec        *execution.ToolExecutor
+	PlanExec        *execution.PlanExecutor
+	Sessions        SessionRepository
+	RouteGraph      RouteGraphStore
+	CapRegistry     CapabilityStore
+	MCPRouter       ToolInvoker
+	MaxFailsPerTool int
+}
+
 type Dispatcher struct {
+	Runtime               *AgentRuntime
+	Brain                 *AgentBrain
+	Executor              *AgentExecutor
+	handlers              map[string]EventHandler
 	MaxSteps              int
 	Sessions              *store.SessionStore
 	RouteGraph            *store.RoutingGraph
@@ -60,7 +137,9 @@ func NewDispatcher(
 		}
 		toolApp = mcpclient.PlannerToolAppendix(mcpRouter.CachedToolSpecs())
 	}
-	return &Dispatcher{
+	d := &Dispatcher{
+		Runtime:               &AgentRuntime{MaxSteps: maxSteps},
+		handlers:              map[string]EventHandler{},
 		MaxSteps:              maxSteps,
 		Sessions:              sessions,
 		RouteGraph:            routeGraph,
@@ -80,56 +159,134 @@ func NewDispatcher(
 		MaxFailsPerTool:       2,
 		ExtractScoreThreshold: 0.8,
 	}
+	d.Brain = &AgentBrain{
+		Router: decision.NewRouter(
+			decision.SkillPolicy{EmbeddingThreshold: d.SkillRouteThreshold, KeywordConfidence: 0.92},
+			decision.GraphPolicy{Threshold: d.GraphRouteThreshold},
+			decision.HeuristicPolicy{},
+			decision.PlannerPolicy{},
+		),
+		Planner: &planning.Planner{
+			Router:                decision.NewRouter(decision.SkillPolicy{EmbeddingThreshold: d.SkillRouteThreshold, KeywordConfidence: 0.92}, decision.GraphPolicy{Threshold: d.GraphRouteThreshold}, decision.HeuristicPolicy{}, decision.PlannerPolicy{}),
+			Sessions:              d.Sessions,
+			RouteGraph:            d.RouteGraph,
+			Skills:                d.Skills,
+			Embedder:              d.Embedder,
+			RecallCorpus:          d.RecallCorpus,
+			PlannerLLM:            d.PlannerLLM,
+			PlanSystemPrompt:      d.PlanSystemPrompt,
+			ValidPlanCapabilities: d.ValidPlanCapabilities,
+			ToolAppendix:          d.ToolAppendix,
+			ToolInputSchemas:      d.ToolInputSchemas,
+			SkillRouteThreshold:   d.SkillRouteThreshold,
+			GraphRouteThreshold:   d.GraphRouteThreshold,
+		},
+		StepCritic: &evaluation.StepCritic{
+			Sessions:        d.Sessions,
+			RouteGraph:      d.RouteGraph,
+			CapRegistry:     d.CapRegistry,
+			MaxFailsPerTool: d.MaxFailsPerTool,
+		},
+		TrajectoryCritic: &evaluation.TrajectoryCritic{
+			Sessions:      d.Sessions,
+			TrajectoryLLM: d.TrajectoryLLM,
+		},
+		Learner: &learning.Learner{
+			Sessions:              d.Sessions,
+			Skills:                d.Skills,
+			RouteGraph:            d.RouteGraph,
+			Embedder:              d.Embedder,
+			SkillRouteThreshold:   d.SkillRouteThreshold,
+			ExtractScoreThreshold: d.ExtractScoreThreshold,
+		},
+		RecallArchiver: &memory.RecallArchiver{
+			Sessions: d.Sessions,
+			Recall:   d.RecallCorpus,
+		},
+		Sessions:              d.Sessions,
+		RouteGraph:            d.RouteGraph,
+		Skills:                d.Skills,
+		Embedder:              d.Embedder,
+		RecallCorpus:          d.RecallCorpus,
+		PlannerLLM:            d.PlannerLLM,
+		TrajectoryLLM:         d.TrajectoryLLM,
+		PlanSystemPrompt:      d.PlanSystemPrompt,
+		ValidPlanCapabilities: d.ValidPlanCapabilities,
+		ToolAppendix:          d.ToolAppendix,
+		ToolInputSchemas:      d.ToolInputSchemas,
+		SkillRouteThreshold:   d.SkillRouteThreshold,
+		GraphRouteThreshold:   d.GraphRouteThreshold,
+		ExtractScoreThreshold: d.ExtractScoreThreshold,
+	}
+	d.Executor = &AgentExecutor{
+		ToolExec: &execution.ToolExecutor{
+			Sessions: d.Sessions,
+			Invoker:  d.MCPRouter,
+		},
+		PlanExec: &execution.PlanExecutor{
+			Sessions:    d.Sessions,
+			RouteGraph:  d.RouteGraph,
+			CapRegistry: d.CapRegistry,
+			MCPRouter:   d.MCPRouter,
+		},
+		Sessions:        d.Sessions,
+		RouteGraph:      d.RouteGraph,
+		CapRegistry:     d.CapRegistry,
+		MCPRouter:       d.MCPRouter,
+		MaxFailsPerTool: d.MaxFailsPerTool,
+	}
+	d.registerDefaultHandlers()
+	return d
+}
+
+func (d *Dispatcher) registerDefaultHandlers() {
+	if d == nil {
+		return
+	}
+	d.handlers = map[string]EventHandler{
+		ports.EvUserInput:           d.Brain.Planner.HandleUserInput,
+		ports.EvPlanCreated:         d.Executor.PlanExec.HandlePlanProgress,
+		ports.EvStepCompleted:       d.Executor.PlanExec.HandlePlanProgress,
+		ports.EvStepCapabilityRetry: d.Executor.PlanExec.HandlePlanProgress,
+		ports.EvToolCall:            d.Executor.ToolExec.HandleToolCall,
+		ports.EvObservationReady:    d.Brain.StepCritic.HandleObservationReady,
+		ports.EvTrajectoryCheck:     d.Brain.TrajectoryCritic.HandleTrajectoryCheck,
+		ports.EvTurnFinalized:       d.turnFinalized,
+	}
+}
+
+func (d *Dispatcher) turnFinalized(ctx context.Context, evt ports.Event) ([]ports.Event, error) {
+	if err := d.Brain.Learner.RecordSkillLearning(ctx, evt); err != nil {
+		return nil, err
+	}
+	if err := d.Brain.RecallArchiver.ArchiveRecall(ctx, evt); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func (d *Dispatcher) dispatchEvent(ctx context.Context, evt ports.Event) ([]ports.Event, error) {
 	if d == nil {
 		return nil, nil
 	}
-	switch evt.Type {
-	case ports.EvUserInput:
-		return d.plnnerUserInput(ctx, evt)
-	case ports.EvPlanCreated, ports.EvStepCompleted, ports.EvStepCapabilityRetry:
-		return d.planExecutorPlanProgress(ctx, evt)
-	case ports.EvToolCall:
-		return d.toolExecutorToolCall(ctx, evt)
-	case ports.EvObservationReady:
-		return d.stepCriticObservationReady(ctx, evt)
-	case ports.EvTrajectoryCheck:
-		return d.trajectoryCriticTrajectoryCheck(ctx, evt)
-	case ports.EvTurnFinalized:
-		if err := d.recordSkillLearning(ctx, evt); err != nil {
-			return nil, err
-		}
-		if err := d.archiveRecall(ctx, evt); err != nil {
-			return nil, err
-		}
-		return nil, nil
-	default:
+	h, ok := d.handlers[evt.Type]
+	if !ok {
 		return nil, nil
 	}
+	return h(ctx, evt)
 }
 
 func (d *Dispatcher) Run(ctx context.Context, queue []ports.Event) error {
 	if d == nil {
 		return fmt.Errorf("engine: nil dispatcher")
 	}
-	if d.MaxSteps <= 0 {
-		return fmt.Errorf("engine: MaxSteps must be > 0")
+	if d.Runtime == nil {
+		d.Runtime = &AgentRuntime{MaxSteps: d.MaxSteps}
 	}
-	n := 0
-	for len(queue) > 0 && n < d.MaxSteps {
-		evt := queue[0]
-		queue = queue[1:]
-		n++
-		out, err := d.dispatchEvent(ctx, evt)
-		if err != nil {
-			log.Printf("engine.Dispatcher.Run: abort event=%s iter=%d err=%v", evt.Type, n, err)
-			return err
-		}
-		queue = append(queue, out...)
+	if len(d.handlers) == 0 {
+		d.registerDefaultHandlers()
 	}
-	return nil
+	return d.Runtime.Run(ctx, queue, d.dispatchEvent)
 }
 
 func plannerSystemPrompt(m map[string]ports.Capability) string {

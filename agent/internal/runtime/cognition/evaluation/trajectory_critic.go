@@ -1,21 +1,31 @@
-package engine
+package evaluation
 
 import (
 	"context"
 	"fmt"
 	"strings"
 
+	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
 const replanScoreThreshold = 0.55
 const maxReplanRounds = 2
-
 const trajSystem = `You are a trajectory critic. Given the plan steps and execution trace, reply in 2-4 sentences: overall quality, any concern, whether safe to show the user. No JSON.`
 
-func (d *Dispatcher) trajectoryCriticTrajectoryCheck(ctx context.Context, evt ports.Event) ([]ports.Event, error) {
+type SessionRepository interface {
+	Get(id string) (*ports.Session, bool)
+	Put(sess *ports.Session) error
+}
+
+type TrajectoryCritic struct {
+	Sessions      SessionRepository
+	TrajectoryLLM *llmclient.OpenAI
+}
+
+func (c *TrajectoryCritic) HandleTrajectoryCheck(ctx context.Context, evt ports.Event) ([]ports.Event, error) {
 	pl := evt.Payload.(ports.PayloadTrajectoryCheck)
-	sess, ok := d.Sessions.Get(pl.SessionID)
+	sess, ok := c.Sessions.Get(pl.SessionID)
 	if !ok || sess.Plan == nil {
 		return nil, nil
 	}
@@ -50,7 +60,7 @@ func (d *Dispatcher) trajectoryCriticTrajectoryCheck(ctx context.Context, evt po
 		}
 	}
 	var summary string
-	if d.TrajectoryLLM == nil {
+	if c.TrajectoryLLM == nil {
 		summary = baseMsg
 	} else {
 		var prompt strings.Builder
@@ -66,7 +76,7 @@ func (d *Dispatcher) trajectoryCriticTrajectoryCheck(ctx context.Context, evt po
 		for _, tr := range sess.Trace {
 			fmt.Fprintf(&prompt, "%s %s ok=%v %s\n", tr.StepID, tr.Tool, tr.OK, tr.Summary)
 		}
-		ext, err := d.TrajectoryLLM.Complete(ctx, trajSystem, prompt.String())
+		ext, err := c.TrajectoryLLM.Complete(ctx, trajSystem, prompt.String())
 		if err != nil {
 			summary = err.Error()
 			score = 0
@@ -77,14 +87,14 @@ func (d *Dispatcher) trajectoryCriticTrajectoryCheck(ctx context.Context, evt po
 			summary = baseMsg + "\n---\n" + ext
 		}
 	}
-	var b strings.Builder
+	var outBuilder strings.Builder
 	for _, tr := range sess.Trace {
 		if tr.Summary != "" {
-			b.WriteString(tr.Summary)
-			b.WriteString("\n")
+			outBuilder.WriteString(tr.Summary)
+			outBuilder.WriteString("\n")
 		}
 	}
-	out := b.String()
+	out := outBuilder.String()
 	if out == "" {
 		out = sess.UserInput
 	}
@@ -97,19 +107,18 @@ func (d *Dispatcher) trajectoryCriticTrajectoryCheck(ctx context.Context, evt po
 	sess.Reply = out
 	sess.TrajectoryScore = score
 	sess.TrajectorySummary = summary
-	if err := d.Sessions.Put(sess); err != nil {
+	if err := c.Sessions.Put(sess); err != nil {
 		return nil, err
 	}
 	if sess.ReplanAllowed && sess.ReplanCount < maxReplanRounds && score < replanScoreThreshold && anyTraceFail(sess.Trace) {
 		sess.ReplanCount++
 		sess.UserInput = sess.UserInput + fmt.Sprintf("\n\n[系统：上轮轨迹评分 %.2f，存在失败步骤。请生成更短、更保守的计划。]", float64(score))
-		if err := d.Sessions.Put(sess); err != nil {
+		if err := c.Sessions.Put(sess); err != nil {
 			return nil, err
 		}
 		return []ports.Event{{Type: ports.EvUserInput, Payload: ports.PayloadUserInput{SessionID: pl.SessionID, Text: sess.UserInput, AutoReplan: true}}}, nil
-	} else {
-		return []ports.Event{{Type: ports.EvTurnFinalized, Payload: ports.PayloadTurnFinalized{SessionID: pl.SessionID}}}, nil
 	}
+	return []ports.Event{{Type: ports.EvTurnFinalized, Payload: ports.PayloadTurnFinalized{SessionID: pl.SessionID}}}, nil
 }
 
 func anyTraceFail(tr []ports.StepTrace) bool {

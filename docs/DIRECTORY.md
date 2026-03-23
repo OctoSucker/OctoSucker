@@ -1,53 +1,76 @@
-# OctoSuckerPlus 目录图
+# Runtime Directory And Boundaries
 
-（仅目录与模块边界；不含每个 `.go` 文件名。）
 
+本文档描述当前 `agent/internal/runtime` 的最新目录架构与职责边界（与当前实现保持同步）。
+
+## 目录结构
+
+```text
+agent/internal/runtime/
+  app/
+    app.go
+
+  engine/
+    dispatcher.go
+    contracts.go
+
+  cognition/
+    decision/
+      policy.go
+    planning/
+      planner.go
+    evaluation/
+      step_critic.go
+      trajectory_critic.go
+    learning/
+      learner.go
+    memory/
+      recall_archiver.go
+
+  execution/
+    plan_executor.go
+    tool_executor.go
+    interfaces.go
+
+  store/
+    session.go
+    skill_registry.go
+    routing_graph.go
+    recall.go
+    capability_registry.go
 ```
-OctoSuckerPlus/
-├── agent/                          # Agent 侧（与 mcpsvc/ 并列）
-│   ├── cmd/                        # Agent 可执行入口
-│   │   └── octoplushttp/
-│   ├── workspace/                  # 示例：config.example.json、default_agent_capabilities.json
-│   ├── pkg/                        # Agent 共享库：ports（DTO）、mcpclient、llmclient、telegram
-│   └── internal/                   # 仅 agent/ 子树可 import（Go internal 规则）
-│       ├── config/                 # Workspace JSON、LoadCapabilities、路径辅助
-│       ├── tests/                  # apptest、testutil、testdata/
-│       └── runtime/                # 运行时组装与引擎
-│           ├── app/                # App、NewFromWorkspace、BuildAppWithConfig
-│           ├── store/              # package store：SessionStore、RoutingGraph、RecallCorpus、CapabilityRegistry、SkillRegistry
-│           └── engine/             # package engine：dispatcher、planner、dispatch、tool_executor、step_critic 等
-├── docs/                           # 说明文档（含本文件）
-├── mcpsvc/                         # 独立 MCP 服务实现（与 agent/ 并列）
-│   ├── internal/
-│   │   └── mcpx/
-│   ├── registry/                   # 插件描述注册表 + JSON 加载
-│   ├── telegram/
-│   │   └── cmd/
-│   │       └── mcp-telegram/
-│   └── web/
-├── scripts/
-│   └── mcp-build.sh
-├── bin/                            # 编译产物（通常不入库或本地生成）
-├── go.mod
-├── go.sum
-├── README.md
-├── .env.example
-└── .gitignore
-```
 
-演进方向与落地状态见 **`docs/ARCHITECTURE_AND_PROGRESS.md`**（「演进路线图」一节）。**`internal/` 分层约定**见 **`docs/AGENT_INTERNAL_LAYERS.md`**。
+## 分层职责边界
 
-## Import 路径速记
+- `app/`
+  - 运行装配入口。
+  - 负责初始化依赖、组装 runtime 组件并启动。
 
-| 区域 | 示例 |
-|------|------|
-| Agent 组装 | `.../agent/internal/runtime/app` |
-| Agent 配置 | `.../agent/internal/config`（`Workspace`、`LoadCapabilities`） |
-| Agent HTTP | `.../agent/internal/runtime/app`（`HTTPHandler`、`NewFromWorkspace` 按 `cfg.http.listen` → `HTTPServer`） |
-| Telegram 入站（Bot 长轮询） | `.../agent/pkg/telegram`（`RunPoll`、`Ingress`） |
-| Workspace 示例 / 本地运行 | 仓库根 `workspace/`（`config.example.json` 等）；无 MCP 测试桩 **`agent/internal/tests/apptest`**；**`testdata/`** 在 **`agent/internal/tests/testdata/`** |
-| 领域 DTO / 事件载荷 | `.../agent/pkg/ports`（`Session`、`Plan`、`Event`、`ToolResult` 等，**无接口**） |
-| 存储（内存） | `internal/runtime/store`（**`SessionStore`**、**`RoutingGraph`**、**`RecallCorpus`**、**`CapabilityRegistry`**；`package store`） |
-| 可插拔契约（与实现同包或邻包） | `mcpclient`（**`MCPRouter`**）、`internal/runtime/engine`（**`Dispatcher`** 等） |
-| MCP 客户端 | `.../agent/pkg/mcpclient`（`package mcpclient`） |
-| MCP 插件表 | `.../mcpsvc/registry` |
+- `engine/`（Runtime + Orchestration）
+  - `dispatcher.go`: 事件循环和 `event -> handler` 分发。
+  - `contracts.go`: 跨层依赖接口（Session/RouteGraph/Skill/ToolInvoker 等）。
+  - 不承载 cognition / execution 的业务实现（已移出 engine）。
+
+- `cognition/`（Brain）
+  - `decision/policy.go`: Router + Policy（Skill/Graph/Heuristic/Planner）。
+  - `planning/planner.go`: 用户输入到计划生成/技能计划选择。
+  - `evaluation/step_critic.go`: step 级观测评估、重试与切换判定。
+  - `evaluation/trajectory_critic.go`: 轨迹评估、评分与 replan 触发。
+  - `learning/learner.go`: skill/graph 学习更新。
+  - `memory/recall_archiver.go`: turn 结果写入 recall 记忆。
+
+- `execution/`（Executor）
+  - `plan_executor.go`: 计划推进、并行 step wave、能力切换。
+  - `tool_executor.go`: 工具调用并发出 observation 事件。
+  - `interfaces.go`: execution 层内部契约（session/route graph/capability）。
+
+- `store/`（Memory）
+  - 仅负责存储/检索与匹配逻辑，不负责调度编排。
+  - 包含 session、skill registry、routing graph、recall、capability registry。
+
+## 当前设计原则（已落地）
+
+- Runtime 只调度，业务逻辑不进入事件循环。
+- Brain 负责决策，Executor 负责执行，Store 负责记忆。
+- Router 使用 `policies []Policy` 并按候选决策择优。
+- 通过 `engine/contracts.go` 实现接口化解耦，避免具体实现耦合。

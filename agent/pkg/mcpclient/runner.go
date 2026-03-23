@@ -27,6 +27,11 @@ type Runner struct {
 	lastRefresh time.Time
 }
 
+type ToolCall struct {
+	Name      string
+	Arguments map[string]any
+}
+
 func Connect(ctx context.Context, endpoint string) (*Runner, error) {
 	if endpoint == "" {
 		return nil, fmt.Errorf("mcpclient: endpoint is required")
@@ -127,10 +132,10 @@ func (r *Runner) ListCapabilities(ctx context.Context) (map[string]ports.Capabil
 }
 
 func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
-	return r.Run(ctx, ports.ToolCall{Name: inv.Tool, Arguments: inv.Arguments})
+	return r.Run(ctx, ToolCall{Name: inv.Tool, Arguments: inv.Arguments})
 }
 
-func (r *Runner) Run(ctx context.Context, call ports.ToolCall) (ports.ToolResult, error) {
+func (r *Runner) Run(ctx context.Context, call ToolCall) (ports.ToolResult, error) {
 	if r == nil || r.sess == nil {
 		return ports.ToolResult{}, fmt.Errorf("mcpclient: runner not connected")
 	}
