@@ -1,11 +1,14 @@
 {
+  "graph_path_mode": "greedy",
+  "skill_learn_min_plan_steps": 3,
+  "skill_learn_min_success_count": 2,
   "openai": {
     "api_key": "sk-xxx",
     "base_url": "https://api.openai.com/v1",
     "model": "gpt-4o-mini",
     "embedding_model": "text-embedding-3-small"
   },
-  "mcp_endpoint": "http://127.0.0.1:8765/mcp",
+  "mcp_endpoint": ["http://127.0.0.1:8765/mcp"],
   "http": {
     "listen": ":8080"
   },

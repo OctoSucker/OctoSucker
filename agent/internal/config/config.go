@@ -10,7 +10,7 @@ import (
 
 type Workspace struct {
 	OpenAI      OpenAI   `json:"openai"`
-	MCPEndpoint string   `json:"mcp_endpoint"`
+	MCPEndpoint []string `json:"mcp_endpoint"`
 	HTTP        HTTP     `json:"http"`
 	Telegram    Telegram `json:"telegram"`
 	// GraphPathMode: "greedy" (default) = Frontier local ranking; "global" = Dijkstra toward finish among feasible next caps.
@@ -73,7 +73,7 @@ func (f *Workspace) normalizeAndValidate(path string) error {
 	if f.OpenAI.EmbeddingModel == "" {
 		return fmt.Errorf("%s: openai.embedding_model is required", path)
 	}
-	if f.MCPEndpoint == "" {
+	if len(f.MCPEndpoint) == 0 {
 		return fmt.Errorf("%s: mcp_endpoint is required", path)
 	}
 	if f.Telegram.BotToken == "" {
