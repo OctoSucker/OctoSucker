@@ -114,12 +114,11 @@ func (m *MCPRouter) Invoke(ctx context.Context, inv ports.CapabilityInvocation) 
 	return ports.ToolResult{}, fmt.Errorf("mcpclient.MCPRouter: tool %q not on any endpoint", inv.Tool)
 }
 
-func ConnectForApp(ctx context.Context, endpoint string) (*MCPRouter, func(), error) {
-	eps := SplitEndpoints(endpoint)
-	if len(eps) == 0 {
-		return nil, nil, fmt.Errorf("mcpclient: endpoint is empty")
+func ConnectForApp(ctx context.Context, endpoints []string) (*MCPRouter, func(), error) {
+	if len(endpoints) == 0 {
+		return nil, nil, fmt.Errorf("mcpclient: endpoints are empty")
 	}
-	router, err := ConnectMCPRouter(ctx, eps)
+	router, err := ConnectMCPRouter(ctx, endpoints)
 	if err != nil {
 		return nil, nil, err
 	}
