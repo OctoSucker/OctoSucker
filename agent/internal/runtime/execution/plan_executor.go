@@ -6,17 +6,20 @@ import (
 	"maps"
 	"sort"
 
-	"github.com/OctoSucker/agent/internal/runtime/store"
-	rtutils "github.com/OctoSucker/agent/utils"
+	"github.com/OctoSucker/agent/internal/runtime/store/capability"
+	routinggraph "github.com/OctoSucker/agent/internal/runtime/store/routing_graph"
+	"github.com/OctoSucker/agent/internal/runtime/store/session"
+	skill "github.com/OctoSucker/agent/internal/runtime/store/skill"
 	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/ports"
+	rtutils "github.com/OctoSucker/agent/utils"
 	"golang.org/x/sync/errgroup"
 )
 
 type PlanExecutor struct {
-	Sessions    *store.SessionStore
-	RouteGraph  *store.RoutingGraph
-	CapRegistry *store.CapabilityRegistry
+	Sessions    *session.SessionStore
+	RouteGraph  *routinggraph.RoutingGraph
+	CapRegistry *capability.CapabilityRegistry
 	MCPRouter   *mcpclient.MCPRouter
 }
 
@@ -27,52 +30,63 @@ type stepWaveResult struct {
 	Out      int
 }
 
-func (x *PlanExecutor) HandlePlanProgress(ctx context.Context, evt ports.Event) ([]ports.Event, error) {
-	switch evt.Type {
-	case ports.EvPlanCreated, ports.EvStepCompleted:
-		var sid string
-		switch pl := evt.Payload.(type) {
-		case ports.PayloadPlanCreated:
-			sid = pl.SessionID
-		case ports.PayloadStepCompleted:
-			sid = pl.SessionID
-		}
-		sess, ok := x.Sessions.Get(sid)
-		if !ok || sess.Plan == nil {
-			return nil, nil
-		}
-		run := sess.Plan.Runnable()
-		if len(run) == 0 {
-			if sess.Plan.AllDone() {
-				return []ports.Event{{Type: ports.EvTrajectoryCheck, Payload: ports.PayloadTrajectoryCheck{SessionID: sid}}}, nil
-			}
-			return nil, nil
-		}
-		if len(run) > 1 {
-			return x.runParallelStepWave(ctx, sid, sess, run)
-		}
-		return x.startPlanStep(ctx, sess, run[0].ID)
-	case ports.EvStepCapabilityRetry:
-		pl := evt.Payload.(ports.PayloadStepCapabilityRetry)
-		sess, ok := x.Sessions.Get(pl.SessionID)
-		if !ok || sess.Plan == nil {
-			return nil, nil
-		}
-		st := rtutils.FindPlanStep(sess.Plan, pl.StepID)
-		if st == nil {
-			return nil, nil
-		}
-		snap := sess.RouteSnap()
-		capID := x.resolvePlanCapability(ctx, snap, st.Capability, pl.ExcludeCapability)
-		if capID == "" {
-			return nil, fmt.Errorf("plan_executor: no alternative capability for step %q", pl.StepID)
-		}
-		st.Capability = capID
-		sess.CapChainStepID, sess.CapChainTools, sess.CapChainNext, sess.StepID, sess.PendingTool = "", nil, 0, "", ""
-		return x.startPlanStep(ctx, sess, pl.StepID)
-	default:
+// HandlePlanCreated continues execution after a new plan is attached to the session.
+func (x *PlanExecutor) HandlePlanCreated(ctx context.Context, evt ports.Event) ([]ports.Event, error) {
+	pl := evt.Payload.(ports.PayloadPlanCreated)
+	return x.handleAfterRunnableProgress(ctx, pl.SessionID)
+}
+
+// HandleStepCompleted continues execution after a step finishes (single-tool path or wave handoff).
+func (x *PlanExecutor) HandleStepCompleted(ctx context.Context, evt ports.Event) ([]ports.Event, error) {
+	pl := evt.Payload.(ports.PayloadStepCompleted)
+	return x.handleAfterRunnableProgress(ctx, pl.SessionID)
+}
+
+// HandleStepCapabilityRetry switches the step to another capability and restarts that step.
+func (x *PlanExecutor) HandleStepCapabilityRetry(ctx context.Context, evt ports.Event) ([]ports.Event, error) {
+	pl := evt.Payload.(ports.PayloadStepCapabilityRetry)
+	sess, ok := x.Sessions.Get(pl.SessionID)
+	if !ok || sess.Plan == nil {
 		return nil, nil
 	}
+	st := rtutils.FindPlanStep(sess.Plan, pl.StepID)
+	if st == nil {
+		return nil, nil
+	}
+	snap := sess.RouteSnap()
+	capID := x.resolvePlanCapability(ctx, snap, st.Capability, pl.ExcludeCapability)
+	if capID == "" {
+		return nil, fmt.Errorf("plan_executor: no alternative capability for step %q", pl.StepID)
+	}
+	st.Capability = capID
+	sess.CapChainStepID, sess.CapChainTools, sess.CapChainNext, sess.StepID, sess.PendingTool = "", nil, 0, "", ""
+	return x.startPlanStep(ctx, sess, pl.StepID)
+}
+
+// handleAfterRunnableProgress runs the next runnable step(s) or emits trajectory check when the plan is done.
+func (x *PlanExecutor) handleAfterRunnableProgress(ctx context.Context, sid string) ([]ports.Event, error) {
+	sess, ok := x.Sessions.Get(sid)
+	if !ok || sess.Plan == nil {
+		return nil, nil
+	}
+	run := sess.Plan.Runnable()
+	if len(run) == 0 {
+		if sess.Plan.AllDone() {
+			return []ports.Event{{Type: ports.EvTrajectoryCheck, Payload: ports.PayloadTrajectoryCheck{SessionID: sid}}}, nil
+		}
+		return nil, nil
+	}
+	if len(run) > 1 {
+		return x.runParallelStepWave(ctx, sid, sess, run)
+	}
+	return x.startPlanStep(ctx, sess, run[0].ID)
+}
+
+func (x *PlanExecutor) routingGraphGoal() string {
+	if x.CapRegistry != nil && len(x.CapRegistry.Tools("finish")) > 0 {
+		return "finish"
+	}
+	return ""
 }
 
 func (x *PlanExecutor) resolvePlanCapability(ctx context.Context, snap ports.RouteSnap, want, exclude string) string {
@@ -98,6 +112,34 @@ func (x *PlanExecutor) resolvePlanCapability(ctx context.Context, snap ports.Rou
 	}
 	if filter(want) {
 		return want
+	}
+	seen := map[string]struct{}{}
+	var candidates []string
+	addCand := func(id string) {
+		if id == "" || !filter(id) {
+			return
+		}
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		candidates = append(candidates, id)
+	}
+	addCand(want)
+	for _, g := range rtutils.RouteSearchGroups(snap.RouteMode, frontier, snap.Preferred, snap.SkillPrior) {
+		for _, c := range g {
+			addCand(c)
+		}
+	}
+	for _, c := range snap.SkillPrior {
+		addCand(c)
+	}
+	if snap.GraphPathMode == ports.GraphPathGlobal {
+		if goal := x.routingGraphGoal(); goal != "" {
+			if picked, ok := x.RouteGraph.PickGlobalBestNext(ctx, rc, snap.LastCap, goal, candidates); ok {
+				return picked
+			}
+		}
 	}
 	for _, g := range rtutils.RouteSearchGroups(snap.RouteMode, frontier, snap.Preferred, snap.SkillPrior) {
 		for _, c := range g {
@@ -140,13 +182,17 @@ func (x *PlanExecutor) startPlanStep(ctx context.Context, sess *ports.Session, s
 	if err := x.Sessions.Put(sess); err != nil {
 		return nil, err
 	}
+	argMap := skill.RenderPlanStepArguments(sess, st.ID)
+	if argMap == nil {
+		argMap = maps.Clone(st.Arguments)
+	}
 	return []ports.Event{{Type: ports.EvToolCall, Payload: ports.PayloadToolCall{
-		SessionID: sess.ID, StepID: st.ID, Capability: st.Capability, Tool: tools[0], Arguments: maps.Clone(st.Arguments),
+		SessionID: sess.ID, StepID: st.ID, Capability: st.Capability, Tool: tools[0], Arguments: argMap,
 	}}}, nil
 }
 
-func (x *PlanExecutor) runPlanStepWave(ctx context.Context, snap ports.RouteSnap, st ports.PlanStep) (stepWaveResult, error) {
-	capID := x.resolvePlanCapability(ctx, snap, st.Capability, "")
+func (x *PlanExecutor) runPlanStepWave(ctx context.Context, sess *ports.Session, st ports.PlanStep) (stepWaveResult, error) {
+	capID := x.resolvePlanCapability(ctx, sess.RouteSnap(), st.Capability, "")
 	if capID != st.Capability {
 		st.Capability = capID
 	}
@@ -154,10 +200,14 @@ func (x *PlanExecutor) runPlanStepWave(ctx context.Context, snap ports.RouteSnap
 	if len(tools) == 0 {
 		return stepWaveResult{}, fmt.Errorf("plan_executor wave: capability %q has no tools", st.Capability)
 	}
+	argMap := skill.RenderPlanStepArguments(sess, st.ID)
+	if argMap == nil {
+		argMap = maps.Clone(st.Arguments)
+	}
 	trace := []ports.StepTrace{}
 	outcome := 0
 	for _, tool := range tools {
-		res, err := x.MCPRouter.Invoke(ctx, ports.CapabilityInvocation{CapabilityID: st.Capability, Tool: tool, Arguments: maps.Clone(st.Arguments)})
+		res, err := x.MCPRouter.Invoke(ctx, ports.CapabilityInvocation{CapabilityID: st.Capability, Tool: tool, Arguments: maps.Clone(argMap)})
 		if err != nil {
 			res = ports.ToolResult{OK: false, Err: err}
 		}
@@ -178,11 +228,10 @@ func (x *PlanExecutor) runParallelStepWave(ctx context.Context, sid string, sess
 	sess.CapChainStepID, sess.CapChainTools, sess.CapChainNext, sess.StepID, sess.PendingTool = "", nil, 0, "", ""
 	results := make([]stepWaveResult, len(run))
 	g, gctx := errgroup.WithContext(ctx)
-	snap := sess.RouteSnap()
 	for i := range run {
 		i, st := i, run[i]
 		g.Go(func() error {
-			w, err := x.runPlanStepWave(gctx, snap, st)
+			w, err := x.runPlanStepWave(gctx, sess, st)
 			if err == nil {
 				results[i] = w
 			}

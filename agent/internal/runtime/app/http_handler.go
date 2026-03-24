@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
-	rtutils "github.com/OctoSucker/agent/utils"
 	"github.com/OctoSucker/agent/pkg/ports"
+	rtutils "github.com/OctoSucker/agent/utils"
 )
 
 type runRequest struct {
@@ -82,7 +82,7 @@ func (a *App) HTTPHandler() http.Handler {
 			rtutils.WriteJSON(w, http.StatusInternalServerError, errResponse{Error: err.Error()})
 			return
 		}
-		sess, _ := a.Dispatcher.Sessions.Get(id)
+		sess, _ := a.Dispatcher.Brain.Planner.Sessions.Get(id)
 		rtutils.WriteJSON(w, http.StatusOK, map[string]any{
 			"reply": reply, "session_id": id,
 			"trajectory_score": float64(sess.TrajectoryScore), "trajectory_summary": sess.TrajectorySummary,
@@ -94,7 +94,7 @@ func (a *App) HTTPHandler() http.Handler {
 			rtutils.WriteJSON(w, http.StatusBadRequest, errResponse{Error: "session id required"})
 			return
 		}
-		sess, ok := a.Dispatcher.Sessions.Get(id)
+		sess, ok := a.Dispatcher.Brain.Planner.Sessions.Get(id)
 		if !ok {
 			rtutils.WriteJSON(w, http.StatusNotFound, errResponse{Error: "not found"})
 			return
@@ -145,7 +145,7 @@ func (a *App) HTTPHandler() http.Handler {
 			rtutils.WriteJSON(w, http.StatusInternalServerError, errResponse{Error: err.Error()})
 			return
 		}
-		sess, ok := a.Dispatcher.Sessions.Get(sid)
+		sess, ok := a.Dispatcher.Brain.Planner.Sessions.Get(sid)
 		if !ok {
 			rtutils.WriteJSON(w, http.StatusInternalServerError, errResponse{Error: "session missing"})
 			return

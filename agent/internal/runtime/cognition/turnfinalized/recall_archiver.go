@@ -1,15 +1,16 @@
-package memory
+package turnfinalized
 
 import (
 	"context"
 
-	"github.com/OctoSucker/agent/internal/runtime/store"
+	"github.com/OctoSucker/agent/internal/runtime/store/recall"
+	"github.com/OctoSucker/agent/internal/runtime/store/session"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
 type RecallArchiver struct {
-	Sessions *store.SessionStore
-	Recall   *store.RecallCorpus
+	Sessions *session.SessionStore
+	Recall   *recall.RecallCorpus
 }
 
 func (r *RecallArchiver) ArchiveRecall(ctx context.Context, evt ports.Event) error {

@@ -1,4 +1,4 @@
-package store
+package routinggraph
 
 import (
 	"context"
@@ -7,13 +7,17 @@ import (
 	"sort"
 	"sync"
 
-	rtutils "github.com/OctoSucker/agent/utils"
+	"github.com/OctoSucker/agent/internal/runtime/store/capability"
 	"github.com/OctoSucker/agent/pkg/ports"
+	rtutils "github.com/OctoSucker/agent/utils"
 )
 
 const recentTransitionsCap = 200
 const trajectoryGamma = 0.9
+const globalDistInf = 1e18
 
+// RoutingGraph holds in-memory topology + edge stats and implements routing algorithms (Confidence, Frontier, global pick).
+// Optional db enables SQLite persistence; all SQL and write-through live in routing_graph_storage.go.
 type RoutingGraph struct {
 	mu                sync.RWMutex
 	edges             map[edgeKey]*portsEdge
@@ -49,7 +53,19 @@ type portsEdge struct {
 	Latency float64
 }
 
-func NewRoutingGraphFromCapabilities(m map[string]ports.Capability, db *sql.DB) *RoutingGraph {
+// NewRoutingGraphFromCapabilityRegistry builds static topology from a capability registry and optionally loads state from SQLite.
+func NewRoutingGraphFromCapabilityRegistry(reg *capability.CapabilityRegistry, db *sql.DB) *RoutingGraph {
+	var m map[string]ports.Capability
+	if reg != nil {
+		m = reg.AllCapabilities()
+	}
+	return newRoutingGraphFromCapabilityMap(m, db)
+}
+
+func newRoutingGraphFromCapabilityMap(m map[string]ports.Capability, db *sql.DB) *RoutingGraph {
+	if m == nil {
+		m = map[string]ports.Capability{}
+	}
 	ids := make([]string, 0, len(m))
 	for id := range m {
 		ids = append(ids, id)
@@ -229,6 +245,122 @@ func (s *RoutingGraph) similarIntentScoreLocked(intent, from, to string) float64
 		return 0
 	}
 	return float64(success) / float64(total)
+}
+
+// edgeWeightGlobalLocked returns a non-negative cost for traversing from→to (higher = worse).
+// Uses empirical success rate and optional cost/latency on the edge (same signals as Frontier).
+func (s *RoutingGraph) edgeWeightGlobalLocked(rc ports.RoutingContext, from, to string) float64 {
+	k := edgeKey{from: from, to: to}
+	e := s.edges[k]
+	p := 0.5
+	if e != nil && e.Success+e.Failure > 0 {
+		p = e.Success / (e.Success + e.Failure)
+	}
+	w := 1.0 - p
+	if e != nil {
+		if e.Latency > 0 {
+			w += e.Latency * 0.001
+		}
+		if e.Cost > 0 {
+			w += e.Cost * 0.01
+		}
+	}
+	_ = rc // reserved for future intent-conditioned edge weights
+	if w < 1e-9 {
+		w = 1e-9
+	}
+	return w
+}
+
+// distToGoalAllLocked runs Dijkstra from goal on the reverse graph: dist[v] = shortest cost from v to goal along forward edges.
+func (s *RoutingGraph) distToGoalAllLocked(rc ports.RoutingContext, goal string) map[string]float64 {
+	rev := make(map[string][]string)
+	for from, tos := range s.static {
+		for _, to := range tos {
+			rev[to] = append(rev[to], from)
+		}
+	}
+	verts := map[string]struct{}{}
+	for from, tos := range s.static {
+		verts[from] = struct{}{}
+		for _, to := range tos {
+			verts[to] = struct{}{}
+		}
+	}
+	if _, ok := verts[goal]; !ok {
+		return nil
+	}
+	dist := make(map[string]float64)
+	for v := range verts {
+		dist[v] = globalDistInf
+	}
+	dist[goal] = 0
+	visited := make(map[string]bool)
+	for {
+		var u string
+		best := globalDistInf
+		for v := range verts {
+			if visited[v] {
+				continue
+			}
+			if dist[v] < best {
+				best = dist[v]
+				u = v
+			}
+		}
+		if best >= globalDistInf {
+			break
+		}
+		visited[u] = true
+		for _, pred := range rev[u] {
+			w := s.edgeWeightGlobalLocked(rc, pred, u)
+			nd := dist[u] + w
+			if nd < dist[pred] {
+				dist[pred] = nd
+			}
+		}
+	}
+	return dist
+}
+
+// PickGlobalBestNext returns the feasible candidate c that minimizes edgeWeight(last,c)+distToGoal(c).
+// Goal is typically "finish" when present in the static topology.
+func (s *RoutingGraph) PickGlobalBestNext(ctx context.Context, rc ports.RoutingContext, last, goal string, candidates []string) (string, bool) {
+	_ = ctx
+	if len(candidates) == 0 {
+		return "", false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	dist := s.distToGoalAllLocked(rc, goal)
+	if dist == nil {
+		return "", false
+	}
+	nextFromLast := map[string]struct{}{}
+	for _, to := range s.static[last] {
+		nextFromLast[to] = struct{}{}
+	}
+	bestC := ""
+	bestCost := globalDistInf
+	for _, c := range candidates {
+		if _, ok := nextFromLast[c]; !ok {
+			continue
+		}
+		w := s.edgeWeightGlobalLocked(rc, last, c)
+		d := dist[c]
+		if d >= globalDistInf-1 {
+			continue
+		}
+		cost := w + d
+		if cost < bestCost {
+			bestCost = cost
+			bestC = c
+		}
+	}
+	if bestC == "" {
+		return "", false
+	}
+	return bestC, true
 }
 
 func (s *RoutingGraph) RecordTransition(ctx context.Context, rc ports.RoutingContext, from, to string, outcome int) error {
