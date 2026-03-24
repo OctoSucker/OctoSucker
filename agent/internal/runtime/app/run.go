@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/OctoSucker/agent/internal/runtime/store"
+	"github.com/OctoSucker/agent/internal/runtime/store/session"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
@@ -49,14 +49,14 @@ func (a *App) RunEvents(ctx context.Context, queue []ports.Event) (map[string]st
 	}
 	out := make(map[string]string)
 	for sid := range seen {
-		if r, ok := replyFromStore(a.Dispatcher.Sessions, sid); ok {
+		if r, ok := replyFromStore(a.Dispatcher.Brain.Planner.Sessions, sid); ok {
 			out[sid] = r
 		}
 	}
 	return out, nil
 }
 
-func replyFromStore(s *store.SessionStore, sessionID string) (string, bool) {
+func replyFromStore(s *session.SessionStore, sessionID string) (string, bool) {
 	if s == nil || sessionID == "" {
 		return "", false
 	}
@@ -71,10 +71,10 @@ func (a *App) RerunSessionPlan(ctx context.Context, sessionID string) (string, e
 	if sessionID == "" {
 		return "", fmt.Errorf("session id required")
 	}
-	if a == nil || a.Dispatcher == nil || a.Dispatcher.Sessions == nil {
+	if a == nil || a.Dispatcher == nil || a.Dispatcher.Brain.Planner.Sessions == nil {
 		return "", fmt.Errorf("app: nil dispatcher or sessions")
 	}
-	sessStore := a.Dispatcher.Sessions
+	sessStore := a.Dispatcher.Brain.Planner.Sessions
 	sess, ok := sessStore.Get(sessionID)
 	if !ok || sess == nil || sess.Plan == nil {
 		return "", ErrRerunNoPlan
@@ -84,6 +84,7 @@ func (a *App) RerunSessionPlan(ctx context.Context, sessionID string) (string, e
 	}
 	sess.Trace = nil
 	sess.ToolFailCount = nil
+	sess.CapabilityFailCount = nil
 	sess.CapChainStepID = ""
 	sess.CapChainTools = nil
 	sess.CapChainNext = 0

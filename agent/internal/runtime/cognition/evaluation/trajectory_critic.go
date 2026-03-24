@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/OctoSucker/agent/internal/runtime/store"
-	rtutils "github.com/OctoSucker/agent/utils"
+	"github.com/OctoSucker/agent/internal/runtime/store/session"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
+	rtutils "github.com/OctoSucker/agent/utils"
 )
 
 const replanScoreThreshold = 0.55
@@ -16,8 +16,12 @@ const maxReplanRounds = 2
 const trajSystem = `You are a trajectory critic. Given the plan steps and execution trace, reply in 2-4 sentences: overall quality, any concern, whether safe to show the user. No JSON.`
 
 type TrajectoryCritic struct {
-	Sessions      *store.SessionStore
+	Sessions      *session.SessionStore
 	TrajectoryLLM *llmclient.OpenAI
+}
+
+func NewTrajectoryCritic(sessions *session.SessionStore, trajectoryLLM *llmclient.OpenAI) *TrajectoryCritic {
+	return &TrajectoryCritic{Sessions: sessions, TrajectoryLLM: trajectoryLLM}
 }
 
 func (c *TrajectoryCritic) HandleTrajectoryCheck(ctx context.Context, evt ports.Event) ([]ports.Event, error) {

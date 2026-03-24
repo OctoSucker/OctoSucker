@@ -1,4 +1,4 @@
-package store
+package recall
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	rtutils "github.com/OctoSucker/agent/utils"
 	"github.com/OctoSucker/agent/pkg/llmclient"
+	rtutils "github.com/OctoSucker/agent/utils"
 )
 
 type RecallCorpus struct {
@@ -32,28 +32,6 @@ func NewRecallCorpus(embedder *llmclient.OpenAI, db *sql.DB) *RecallCorpus {
 	return m
 }
 
-func (m *RecallCorpus) loadAll() error {
-	rows, err := m.db.Query(`SELECT text, embedding FROM recall_chunks ORDER BY id ASC`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.texts = m.texts[:0]
-	m.embeddings = m.embeddings[:0]
-	for rows.Next() {
-		var text string
-		var emb []byte
-		if err := rows.Scan(&text, &emb); err != nil {
-			return err
-		}
-		m.texts = append(m.texts, text)
-		m.embeddings = append(m.embeddings, rtutils.BlobToFloat32Slice(emb))
-	}
-	return rows.Err()
-}
-
 func (m *RecallCorpus) Write(ctx context.Context, text string) error {
 	t := text
 	if t == "" {
@@ -74,16 +52,7 @@ func (m *RecallCorpus) Write(ctx context.Context, text string) error {
 		m.embeddings = append(m.embeddings, nil)
 	}
 	m.mu.Unlock()
-	if m.db != nil {
-		var blob interface{}
-		if len(vec) > 0 {
-			blob = rtutils.Float32SliceToBlob(vec)
-		}
-		if _, err := m.db.Exec(`INSERT INTO recall_chunks (text, embedding) VALUES (?, ?)`, t, blob); err != nil {
-			return err
-		}
-	}
-	return nil
+	return m.persistInsert(t, vec)
 }
 
 func (m *RecallCorpus) Recall(ctx context.Context, query string, k int) ([]string, error) {

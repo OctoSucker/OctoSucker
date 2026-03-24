@@ -13,6 +13,12 @@ type Workspace struct {
 	MCPEndpoint string   `json:"mcp_endpoint"`
 	HTTP        HTTP     `json:"http"`
 	Telegram    Telegram `json:"telegram"`
+	// GraphPathMode: "greedy" (default) = Frontier local ranking; "global" = Dijkstra toward finish among feasible next caps.
+	GraphPathMode string `json:"graph_path_mode,omitempty"`
+	// SkillLearnMinPlanSteps: min plan steps before skill extract counter applies (0 = default 3; -1 = no minimum).
+	SkillLearnMinPlanSteps int `json:"skill_learn_min_plan_steps,omitempty"`
+	// SkillLearnMinSuccessCount: qualifying successes per capability path before MergeOrAdd (0 = default 2).
+	SkillLearnMinSuccessCount int `json:"skill_learn_min_success_count,omitempty"`
 }
 
 type OpenAI struct {

@@ -32,23 +32,18 @@ func NewFromWorkspace(ctx context.Context, workspaceRoot string, cfg *config.Wor
 		return nil, err
 	}
 
-	caps, err := mcpRouter.ListCapabilities(ctx)
-	if err != nil {
-		shutdown()
-		return nil, err
-	}
-	if len(caps) == 0 {
-		shutdown()
-		return nil, fmt.Errorf("octoplus: MCP exposed no tools; ensure list_tools returns tools")
-	}
-
 	dataDB, err := store.OpenAgentDB(workspaceRoot)
 	if err != nil {
 		shutdown()
 		return nil, fmt.Errorf("octoplus: sqlite: %w", err)
 	}
 
-	d := engine.NewDispatcher(500, mcpRouter, caps, cfg.OpenAI, dataDB)
+	d, err := engine.NewDispatcher(ctx, mcpRouter, cfg.OpenAI, dataDB, cfg.GraphPathMode, cfg.SkillLearnMinPlanSteps, cfg.SkillLearnMinSuccessCount)
+	if err != nil {
+		_ = dataDB.Close()
+		shutdown()
+		return nil, fmt.Errorf("octoplus: dispatcher: %w", err)
+	}
 	telegram, err := telegram.NewIngress(cfg.Telegram.BotToken, cfg.Telegram.DefaultChatID, cfg.Telegram.AllowedChatIDs)
 	if err != nil {
 		_ = dataDB.Close()

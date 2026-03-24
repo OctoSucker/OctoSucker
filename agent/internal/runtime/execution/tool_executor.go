@@ -4,13 +4,13 @@ import (
 	"context"
 	"maps"
 
-	"github.com/OctoSucker/agent/internal/runtime/store"
+	"github.com/OctoSucker/agent/internal/runtime/store/session"
 	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
 type ToolExecutor struct {
-	Sessions *store.SessionStore
+	Sessions *session.SessionStore
 	Invoker  *mcpclient.MCPRouter
 }
 
