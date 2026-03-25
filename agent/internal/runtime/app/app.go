@@ -31,7 +31,7 @@ func NewFromWorkspace(ctx context.Context, workspaceRoot string, cfg *config.Wor
 		return nil, fmt.Errorf("octoplus: workspace config required")
 	}
 
-	mcpRouter, shutdown, err := mcpclient.ConnectForApp(ctx, cfg.MCPEndpoint)
+	mcpRouter, shutdown, err := mcpclient.NewMCPRouter(ctx, cfg.MCPEndpoint)
 	if err != nil {
 		return nil, err
 	}

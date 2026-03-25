@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/OctoSucker/agent/pkg/ports"
+	"github.com/OctoSucker/agent/pkg/mcpclient"
 )
 
 // NodeFailureStats aggregates deduplicated node-level (capability + tool + context) failures for planning hints.
@@ -49,7 +49,7 @@ func (n *NodeFailureStats) RecordFailure(capability, tool, fromCap, errMsg strin
 	return n.dbUpsertFailure(key, capability, tool, fromCap, sig, now)
 }
 
-func (n *NodeFailureStats) HintForCapabilities(validPlanCapabilities map[string]ports.Capability) string {
+func (n *NodeFailureStats) HintForCapabilities(validPlanCapabilities map[string]mcpclient.Capability) string {
 	if len(validPlanCapabilities) == 0 {
 		return ""
 	}

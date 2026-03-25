@@ -24,17 +24,6 @@ func (res ToolResult) Observation() Observation {
 	return Observation{Summary: s, Structured: res.Output}
 }
 
-type Capability struct {
-	ID    string   `json:"id"`
-	Tools []string `json:"tools"`
-}
-
-type CapabilityInvocation struct {
-	CapabilityID string
-	Tool         string
-	Arguments    map[string]any
-}
-
 type RouteMode string
 
 const (

@@ -6,31 +6,17 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"time"
 
 	"github.com/OctoSucker/agent/pkg/ports"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const toolsListCacheTTL = time.Minute
-
-type ToolSpec struct {
-	Name        string
-	Description string
-	InputSchema any
-}
-
 type Runner struct {
-	mu          sync.RWMutex
-	sess        *mcp.ClientSession
-	names       map[string]struct{}
-	tools       []ToolSpec
-	lastRefresh time.Time
-}
-
-type ToolCall struct {
-	Name      string
-	Arguments map[string]any
+	name  string
+	mu    sync.RWMutex
+	sess  *mcp.ClientSession
+	names map[string]struct{}
+	tools []mcp.Tool
 }
 
 func Connect(ctx context.Context, endpoint string) (*Runner, error) {
@@ -45,20 +31,51 @@ func Connect(ctx context.Context, endpoint string) (*Runner, error) {
 		return nil, err
 	}
 	r.sess = sess
-	if err := r.refreshTools(ctx); err != nil {
+	init := sess.InitializeResult()
+	if init == nil || init.ServerInfo == nil || init.ServerInfo.Name == "" {
 		if cerr := sess.Close(); cerr != nil {
-			err = errors.Join(err, fmt.Errorf("mcpclient: close session after refresh failure: %w", cerr))
+			err = errors.Join(err, fmt.Errorf("mcpclient: close session after missing server info: %w", cerr))
 		}
-		return nil, err
+		return nil, fmt.Errorf("mcpclient: initialize result missing server name")
 	}
+	r.name = init.ServerInfo.Name
+	r.mu.Lock()
+	r.names = make(map[string]struct{})
+	var all []mcp.Tool
+	var cursor string
+	for {
+		res, err := r.sess.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
+		if err != nil {
+			r.mu.Unlock()
+			if cerr := sess.Close(); cerr != nil {
+				err = errors.Join(err, fmt.Errorf("mcpclient: close session after refresh failure: %w", cerr))
+			}
+			return nil, fmt.Errorf("mcpclient list_tools: %w", err)
+		}
+		for _, t := range res.Tools {
+			if t == nil || t.Name == "" {
+				continue
+			}
+			r.names[t.Name] = struct{}{}
+			all = append(all, *t)
+		}
+		if res.NextCursor == "" {
+			break
+		}
+		cursor = res.NextCursor
+	}
+	r.tools = all
+	r.mu.Unlock()
 	return r, nil
 }
 
 func (r *Runner) Close() error {
-	if r == nil || r.sess == nil {
-		return nil
-	}
 	return r.sess.Close()
+}
+
+func (r *Runner) Name() string {
+
+	return r.name
 }
 
 func (r *Runner) HasTool(name string) bool {
@@ -68,31 +85,32 @@ func (r *Runner) HasTool(name string) bool {
 	return ok
 }
 
-func (r *Runner) CachedTools() []ToolSpec {
+func (r *Runner) ListToolSpecs(ctx context.Context) []mcp.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]ToolSpec, len(r.tools))
+	out := make([]mcp.Tool, len(r.tools))
 	copy(out, r.tools)
 	return out
 }
 
-func (r *Runner) refreshTools(ctx context.Context) error {
+func (r *Runner) Invoke(ctx context.Context, inv CapabilityInvocation) (ports.ToolResult, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.names = make(map[string]struct{})
-	var all []ToolSpec
+	var all []mcp.Tool
 	var cursor string
 	for {
 		res, err := r.sess.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
 		if err != nil {
-			return fmt.Errorf("mcpclient list_tools: %w", err)
+			r.mu.Unlock()
+			log.Printf("mcpclient: list_tools refresh failed before CallTool tool=%q err=%v", inv.Tool, err)
+			return ports.ToolResult{}, fmt.Errorf("mcpclient list_tools: %w", err)
 		}
 		for _, t := range res.Tools {
 			if t == nil || t.Name == "" {
 				continue
 			}
 			r.names[t.Name] = struct{}{}
-			all = append(all, ToolSpec{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+			all = append(all, *t)
 		}
 		if res.NextCursor == "" {
 			break
@@ -100,58 +118,30 @@ func (r *Runner) refreshTools(ctx context.Context) error {
 		cursor = res.NextCursor
 	}
 	r.tools = all
-	r.lastRefresh = time.Now()
-	return nil
-}
-
-func (r *Runner) refreshIfStale(ctx context.Context) error {
-	r.mu.RLock()
-	stale := time.Since(r.lastRefresh) > toolsListCacheTTL
-	r.mu.RUnlock()
-	if !stale {
-		return nil
-	}
-	return r.refreshTools(ctx)
-}
-
-func (r *Runner) ListCapabilities(ctx context.Context) (map[string]ports.Capability, error) {
-	if r == nil || r.sess == nil {
-		return nil, fmt.Errorf("mcpclient: runner not connected")
-	}
-	if err := r.refreshIfStale(ctx); err != nil {
-		return nil, err
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make(map[string]ports.Capability, len(r.tools))
-	for _, t := range r.tools {
-		if t.Name == "" {
-			continue
-		}
-		id := t.Name
-		out[id] = ports.Capability{ID: id, Tools: []string{id}}
-	}
-	return out, nil
-}
-
-func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
-	call := ToolCall{Name: inv.Tool, Arguments: inv.Arguments}
-
-	if err := r.refreshIfStale(ctx); err != nil {
-		log.Printf("mcpclient: list_tools refresh failed before CallTool tool=%q err=%v", call.Name, err)
-		return ports.ToolResult{}, err
-	}
-	if !r.HasTool(call.Name) {
-		return ports.ToolResult{}, fmt.Errorf("mcpclient: tool %q not exposed by MCP server (refresh list_tools if hot-plugged)", call.Name)
+	_, ok := r.names[inv.Tool]
+	r.mu.Unlock()
+	if !ok {
+		return ports.ToolResult{}, fmt.Errorf("mcpclient: tool %q not exposed by MCP server (refresh list_tools if hot-plugged)", inv.Tool)
 	}
 	args := any(map[string]any{})
-	if call.Arguments != nil {
-		args = call.Arguments
+	if inv.Arguments != nil {
+		args = inv.Arguments
 	}
-	res, err := r.sess.CallTool(ctx, &mcp.CallToolParams{Name: call.Name, Arguments: args})
+	res, err := r.sess.CallTool(ctx, &mcp.CallToolParams{Name: inv.Tool, Arguments: args})
 	if err != nil {
-		log.Printf("mcpclient: CallTool failed tool=%q arguments=%v err=%v", call.Name, args, err)
+		log.Printf("mcpclient: CallTool failed tool=%q arguments=%v err=%v", inv.Tool, args, err)
 		return ports.ToolResult{}, err
 	}
 	return mcpResultToPorts(res), nil
+}
+
+type CapabilityInvocation struct {
+	ServerName string
+	Tool       string
+	Arguments  map[string]any
+}
+
+type Capability struct {
+	CapabilityName string   `json:"capability_name"`
+	Tools          []string `json:"tools"`
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/OctoSucker/agent/internal/runtime/store/capability"
+	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 	rtutils "github.com/OctoSucker/agent/utils"
 )
@@ -55,16 +56,16 @@ type portsEdge struct {
 
 // NewRoutingGraphFromCapabilityRegistry builds static topology from a capability registry and optionally loads state from SQLite.
 func NewRoutingGraphFromCapabilityRegistry(reg *capability.CapabilityRegistry, db *sql.DB) (*RoutingGraph, error) {
-	var m map[string]ports.Capability
+	var m map[string]mcpclient.Capability
 	if reg != nil {
 		m = reg.AllCapabilities()
 	}
 	return newRoutingGraphFromCapabilityMap(m, db)
 }
 
-func newRoutingGraphFromCapabilityMap(m map[string]ports.Capability, db *sql.DB) (*RoutingGraph, error) {
+func newRoutingGraphFromCapabilityMap(m map[string]mcpclient.Capability, db *sql.DB) (*RoutingGraph, error) {
 	if m == nil {
-		m = map[string]ports.Capability{}
+		m = map[string]mcpclient.Capability{}
 	}
 	ids := make([]string, 0, len(m))
 	for id := range m {

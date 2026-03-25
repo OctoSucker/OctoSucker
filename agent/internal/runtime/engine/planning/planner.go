@@ -11,6 +11,7 @@ import (
 	skill "github.com/OctoSucker/agent/internal/runtime/store/skill"
 	"github.com/OctoSucker/agent/internal/runtime/store/task"
 	"github.com/OctoSucker/agent/pkg/llmclient"
+	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
@@ -25,7 +26,7 @@ type Planner struct {
 	RecallCorpus          *recall.RecallCorpus
 	PlannerLLM            *llmclient.OpenAI
 	PlanSystemPrompt      string
-	ValidPlanCapabilities map[string]ports.Capability
+	ValidPlanCapabilities map[string]mcpclient.Capability
 	ToolAppendix          string
 	ToolInputSchemas      map[string]any
 	// DefaultGraphPathMode: greedy (Frontier) vs global (Dijkstra on feasible candidates); applied each turn on the task.
@@ -43,7 +44,7 @@ func NewPlanner(
 	nodeFailures *nodefailure.NodeFailureStats,
 	recallCorpus *recall.RecallCorpus,
 	plannerLLM *llmclient.OpenAI,
-	validPlanCapabilities map[string]ports.Capability,
+	validPlanCapabilities map[string]mcpclient.Capability,
 	toolAppendix string,
 	toolInputSchemas map[string]any,
 	defaultGraphPathMode ports.GraphPathMode,

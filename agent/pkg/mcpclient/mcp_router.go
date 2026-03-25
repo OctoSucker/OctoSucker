@@ -5,33 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/OctoSucker/agent/pkg/ports"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type MCPRouter struct {
-	runners []*Runner
+	runners map[string]*Runner
 }
 
-func SplitEndpoints(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	var out []string
-	for _, part := range strings.Split(raw, ",") {
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
-func ConnectMCPRouter(ctx context.Context, endpoints []string) (*MCPRouter, error) {
+func NewMCPRouter(ctx context.Context, endpoints []string) (*MCPRouter, func(), error) {
 	if len(endpoints) == 0 {
-		return nil, fmt.Errorf("mcpclient.ConnectMCPRouter: no endpoints")
+		return nil, nil, fmt.Errorf("mcpclient: endpoints are empty")
 	}
-	var runners []*Runner
+	runners := make(map[string]*Runner)
 	for _, ep := range endpoints {
 		r, err := Connect(ctx, ep)
 		if err != nil {
@@ -44,20 +31,26 @@ func ConnectMCPRouter(ctx context.Context, endpoints []string) (*MCPRouter, erro
 			if closeErr != nil {
 				err = errors.Join(err, fmt.Errorf("mcpclient.ConnectMCPRouter: cleanup: %w", closeErr))
 			}
-			return nil, fmt.Errorf("mcpclient.ConnectMCPRouter %q: %w", ep, err)
+			return nil, nil, fmt.Errorf("mcpclient.ConnectMCPRouter %q: %w", ep, err)
 		}
-		runners = append(runners, r)
+		runners[r.Name()] = r
 	}
-	return &MCPRouter{runners: runners}, nil
+	router := &MCPRouter{runners: runners}
+
+	return router, func() {
+		if err := router.Close(); err != nil {
+			log.Printf("mcpclient: router close: %v", err)
+		}
+	}, nil
 }
 
-func (m *MCPRouter) CachedToolSpecs() []ToolSpec {
+func (m *MCPRouter) ListToolSpecs() []mcp.Tool {
 	if m == nil {
 		return nil
 	}
-	var out []ToolSpec
+	var out []mcp.Tool
 	for _, r := range m.runners {
-		out = append(out, r.CachedTools()...)
+		out = append(out, r.ListToolSpecs(context.Background())...)
 	}
 	return out
 }
@@ -87,52 +80,29 @@ func (m *MCPRouter) Close() error {
 	return first
 }
 
-func (m *MCPRouter) ListCapabilities(ctx context.Context) (map[string]ports.Capability, error) {
+// key: server name, value: tools
+func (m *MCPRouter) ListCapabilities(ctx context.Context) (map[string][]mcp.Tool, error) {
 	if m == nil || len(m.runners) == 0 {
 		return nil, fmt.Errorf("mcpclient.MCPRouter: empty")
 	}
-	out := make(map[string]ports.Capability)
+	out := make(map[string][]mcp.Tool)
 	for _, r := range m.runners {
-		caps, err := r.ListCapabilities(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for id, cap := range caps {
-			if _, dup := out[id]; dup {
-				return nil, fmt.Errorf("mcpclient.MCPRouter: duplicate tool %q (use one MCP per tool name)", id)
-			}
-			out[id] = cap
-		}
+		tools := r.ListToolSpecs(ctx)
+		out[r.Name()] = tools
 	}
 	return out, nil
 }
 
-func (m *MCPRouter) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
+func (m *MCPRouter) Invoke(ctx context.Context, inv CapabilityInvocation) (ports.ToolResult, error) {
 	if m == nil {
 		return ports.ToolResult{}, fmt.Errorf("mcpclient.MCPRouter: nil")
 	}
-	for _, r := range m.runners {
-		if err := r.refreshIfStale(ctx); err != nil {
-			return ports.ToolResult{}, err
-		}
-		if r.HasTool(inv.Tool) {
-			return r.Invoke(ctx, inv)
-		}
+	runner, ok := m.runners[inv.ServerName]
+	if !ok {
+		return ports.ToolResult{}, fmt.Errorf("mcpclient.MCPRouter: server %q not found", inv.ServerName)
 	}
-	return ports.ToolResult{}, fmt.Errorf("mcpclient.MCPRouter: tool %q not on any endpoint", inv.Tool)
-}
-
-func ConnectForApp(ctx context.Context, endpoints []string) (*MCPRouter, func(), error) {
-	if len(endpoints) == 0 {
-		return nil, nil, fmt.Errorf("mcpclient: endpoints are empty")
+	if !runner.HasTool(inv.Tool) {
+		return ports.ToolResult{}, fmt.Errorf("mcpclient.MCPRouter: tool %q not found on server %q", inv.Tool, inv.ServerName)
 	}
-	router, err := ConnectMCPRouter(ctx, endpoints)
-	if err != nil {
-		return nil, nil, err
-	}
-	return router, func() {
-		if err := router.Close(); err != nil {
-			log.Printf("mcpclient: router close: %v", err)
-		}
-	}, nil
+	return runner.Invoke(ctx, inv)
 }

@@ -87,7 +87,7 @@ func NewDispatcher(
 			recallCorpus,
 			plannerLLM,
 			capReg.AllCapabilities(),
-			mcpclient.PlannerToolAppendix(mcpRouter.CachedToolSpecs()),
+			mcpclient.PlannerToolAppendix(mcpRouter.ListToolSpecs()),
 			capReg.ToolInputSchemasByName(),
 			gpm,
 		),

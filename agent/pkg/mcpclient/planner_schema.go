@@ -3,9 +3,11 @@ package mcpclient
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func PlannerToolAppendix(tools []ToolSpec) string {
+func PlannerToolAppendix(tools []mcp.Tool) string {
 	if len(tools) == 0 {
 		return ""
 	}
