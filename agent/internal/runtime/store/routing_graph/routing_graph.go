@@ -54,7 +54,7 @@ type portsEdge struct {
 }
 
 // NewRoutingGraphFromCapabilityRegistry builds static topology from a capability registry and optionally loads state from SQLite.
-func NewRoutingGraphFromCapabilityRegistry(reg *capability.CapabilityRegistry, db *sql.DB) *RoutingGraph {
+func NewRoutingGraphFromCapabilityRegistry(reg *capability.CapabilityRegistry, db *sql.DB) (*RoutingGraph, error) {
 	var m map[string]ports.Capability
 	if reg != nil {
 		m = reg.AllCapabilities()
@@ -62,7 +62,7 @@ func NewRoutingGraphFromCapabilityRegistry(reg *capability.CapabilityRegistry, d
 	return newRoutingGraphFromCapabilityMap(m, db)
 }
 
-func newRoutingGraphFromCapabilityMap(m map[string]ports.Capability, db *sql.DB) *RoutingGraph {
+func newRoutingGraphFromCapabilityMap(m map[string]ports.Capability, db *sql.DB) (*RoutingGraph, error) {
 	if m == nil {
 		m = map[string]ports.Capability{}
 	}
@@ -73,23 +73,16 @@ func newRoutingGraphFromCapabilityMap(m map[string]ports.Capability, db *sql.DB)
 	sort.Strings(ids)
 	static := make(map[string][]string, len(ids)+1)
 	static[""] = append([]string(nil), ids...)
-	_, hasFinish := m["finish"]
 	for _, id := range ids {
-		if id == "finish" {
-			static[id] = []string{}
-			continue
-		}
-		if hasFinish {
-			static[id] = []string{"finish"}
-		} else {
-			static[id] = []string{}
-		}
+		static[id] = []string{}
 	}
 	g := &RoutingGraph{edges: make(map[edgeKey]*portsEdge), static: static, db: db}
 	if db != nil {
-		_ = g.loadFromDB()
+		if err := g.loadFromDB(); err != nil {
+			return nil, err
+		}
 	}
-	return g
+	return g, nil
 }
 
 func (s *RoutingGraph) Confidence(ctx context.Context, rc ports.RoutingContext, last string) float64 {
@@ -97,7 +90,7 @@ func (s *RoutingGraph) Confidence(ctx context.Context, rc ports.RoutingContext, 
 	defer s.mu.RUnlock()
 	next := s.static[last]
 	if len(next) == 0 {
-		next, _ = s.entryNodesLocked()
+		next = s.entryNodesLocked()
 	}
 	if len(next) == 0 {
 		return 0
@@ -162,7 +155,7 @@ func (s *RoutingGraph) Frontier(ctx context.Context, rc ports.RoutingContext, la
 	defer s.mu.RUnlock()
 	next := s.static[last]
 	if len(next) == 0 {
-		next, _ = s.entryNodesLocked()
+		next = s.entryNodesLocked()
 	}
 	if len(next) == 0 {
 		return nil, nil
@@ -215,8 +208,8 @@ func (s *RoutingGraph) Frontier(ctx context.Context, rc ports.RoutingContext, la
 	return out, nil
 }
 
-func (s *RoutingGraph) entryNodesLocked() ([]string, error) {
-	return append([]string(nil), s.static[""]...), nil
+func (s *RoutingGraph) entryNodesLocked() []string {
+	return append([]string(nil), s.static[""]...)
 }
 
 func (s *RoutingGraph) similarIntentScoreLocked(intent, from, to string) float64 {
@@ -249,7 +242,7 @@ func (s *RoutingGraph) similarIntentScoreLocked(intent, from, to string) float64
 
 // edgeWeightGlobalLocked returns a non-negative cost for traversing from→to (higher = worse).
 // Uses empirical success rate and optional cost/latency on the edge (same signals as Frontier).
-func (s *RoutingGraph) edgeWeightGlobalLocked(rc ports.RoutingContext, from, to string) float64 {
+func (s *RoutingGraph) edgeWeightGlobalLocked(_ ports.RoutingContext, from, to string) float64 {
 	k := edgeKey{from: from, to: to}
 	e := s.edges[k]
 	p := 0.5
@@ -265,7 +258,6 @@ func (s *RoutingGraph) edgeWeightGlobalLocked(rc ports.RoutingContext, from, to 
 			w += e.Cost * 0.01
 		}
 	}
-	_ = rc // reserved for future intent-conditioned edge weights
 	if w < 1e-9 {
 		w = 1e-9
 	}
@@ -324,9 +316,7 @@ func (s *RoutingGraph) distToGoalAllLocked(rc ports.RoutingContext, goal string)
 }
 
 // PickGlobalBestNext returns the feasible candidate c that minimizes edgeWeight(last,c)+distToGoal(c).
-// Goal is typically "finish" when present in the static topology.
-func (s *RoutingGraph) PickGlobalBestNext(ctx context.Context, rc ports.RoutingContext, last, goal string, candidates []string) (string, bool) {
-	_ = ctx
+func (s *RoutingGraph) PickGlobalBestNext(_ context.Context, rc ports.RoutingContext, last, goal string, candidates []string) (string, bool) {
 	if len(candidates) == 0 {
 		return "", false
 	}
@@ -354,6 +344,35 @@ func (s *RoutingGraph) PickGlobalBestNext(ctx context.Context, rc ports.RoutingC
 		cost := w + d
 		if cost < bestCost {
 			bestCost = cost
+			bestC = c
+		}
+	}
+	if bestC == "" {
+		return "", false
+	}
+	return bestC, true
+}
+
+// PickBestByImmediateEdge returns the feasible candidate c with minimal immediate edge weight.
+func (s *RoutingGraph) PickBestByImmediateEdge(_ context.Context, rc ports.RoutingContext, last string, candidates []string) (string, bool) {
+	if len(candidates) == 0 {
+		return "", false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	nextFromLast := map[string]struct{}{}
+	for _, to := range s.static[last] {
+		nextFromLast[to] = struct{}{}
+	}
+	bestC := ""
+	bestWeight := globalDistInf
+	for _, c := range candidates {
+		if _, ok := nextFromLast[c]; !ok {
+			continue
+		}
+		w := s.edgeWeightGlobalLocked(rc, last, c)
+		if w < bestWeight {
+			bestWeight = w
 			bestC = c
 		}
 	}
@@ -392,11 +411,10 @@ func (s *RoutingGraph) RecordTransition(ctx context.Context, rc ports.RoutingCon
 	if len(s.recentTransitions) > recentTransitionsCap {
 		s.recentTransitions = s.recentTransitions[len(s.recentTransitions)-recentTransitionsCap:]
 	}
-	s.persistEdgeAndRecentLocked(k, e)
-	return nil
+	return s.persistEdgeAndRecentLocked(k, e)
 }
 
-func (s *RoutingGraph) RestoreEdges(edges []EdgeStat) {
+func (s *RoutingGraph) RestoreEdges(edges []EdgeStat) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.edges = make(map[edgeKey]*portsEdge)
@@ -404,12 +422,12 @@ func (s *RoutingGraph) RestoreEdges(edges []EdgeStat) {
 		k := edgeKey{from: e.From, to: e.To}
 		s.edges[k] = &portsEdge{Success: float64(e.Success), Failure: float64(e.Failure)}
 	}
-	s.persistAllEdgesLocked()
+	return s.persistAllEdgesLocked()
 }
 
-func (s *RoutingGraph) RecordTrajectory(path []ports.TransitionStep, score float64, success bool) {
+func (s *RoutingGraph) RecordTrajectory(path []ports.TransitionStep, score float64, success bool) error {
 	if len(path) == 0 {
-		return
+		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -428,7 +446,7 @@ func (s *RoutingGraph) RecordTrajectory(path []ports.TransitionStep, score float
 			e.Failure += w
 		}
 	}
-	s.persistTrajectoryLocked(path)
+	return s.persistTrajectoryLocked(path)
 }
 
 func (s *RoutingGraph) ListEdges() []EdgeStat {

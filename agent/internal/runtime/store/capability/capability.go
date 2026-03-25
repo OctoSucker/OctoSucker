@@ -31,9 +31,6 @@ func NewCapabilityRegistry(ctx context.Context, mcp *mcpclient.MCPRouter) (*Capa
 
 // AllCapabilities returns a snapshot for read-only routing/planner use.
 func (r *CapabilityRegistry) AllCapabilities() map[string]ports.Capability {
-	if r == nil {
-		return nil
-	}
 	out := make(map[string]ports.Capability, len(r.caps))
 	for k, v := range r.caps {
 		out[k] = ports.Capability{ID: v.ID, Tools: append([]string(nil), v.Tools...)}
@@ -43,7 +40,7 @@ func (r *CapabilityRegistry) AllCapabilities() map[string]ports.Capability {
 
 // ToolInputSchemasByName maps MCP tool name → JSON input schema (for planner step arguments).
 func (r *CapabilityRegistry) ToolInputSchemasByName() map[string]any {
-	if r == nil || r.mcp == nil {
+	if r.mcp == nil {
 		return map[string]any{}
 	}
 	out := make(map[string]any)
@@ -54,9 +51,6 @@ func (r *CapabilityRegistry) ToolInputSchemasByName() map[string]any {
 }
 
 func (r *CapabilityRegistry) FirstTool(capID string) string {
-	if r == nil {
-		return ""
-	}
 	c, ok := r.caps[capID]
 	if !ok || len(c.Tools) == 0 {
 		return ""
@@ -65,9 +59,6 @@ func (r *CapabilityRegistry) FirstTool(capID string) string {
 }
 
 func (r *CapabilityRegistry) Tools(capID string) []string {
-	if r == nil {
-		return nil
-	}
 	c, ok := r.caps[capID]
 	if !ok {
 		return nil

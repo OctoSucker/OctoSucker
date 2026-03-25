@@ -1,24 +1,34 @@
 package ports
 
 type PayloadUserInput struct {
-	SessionID  string `json:"session_id"`
+	TaskID     string `json:"task_id"`
 	Text       string `json:"text"`
 	AutoReplan bool   `json:"auto_replan,omitempty"`
+	// TelegramChatID is set when the message came from Telegram but TaskID is a shared conversation key (see workspace conversation_id).
+	TelegramChatID int64 `json:"telegram_chat_id,omitempty"`
 }
 
-type PayloadPlanCreated struct {
-	SessionID string `json:"session_id"`
+type PayloadPlanProgressed struct {
+	TaskID string `json:"task_id"`
+}
+
+type PayloadSkillPlanRequested struct {
+	TaskID string `json:"task_id"`
+}
+
+type PayloadLLMPlanRequested struct {
+	TaskID string `json:"task_id"`
 }
 
 type PayloadToolsBound struct {
-	SessionID  string   `json:"session_id"`
+	TaskID     string   `json:"task_id"`
 	StepID     string   `json:"step_id"`
 	Capability string   `json:"capability"`
 	Tools      []string `json:"tools"`
 }
 
 type PayloadToolCall struct {
-	SessionID  string         `json:"session_id"`
+	TaskID     string         `json:"task_id"`
 	StepID     string         `json:"step_id"`
 	Capability string         `json:"capability"`
 	Tool       string         `json:"tool"`
@@ -26,27 +36,23 @@ type PayloadToolCall struct {
 }
 
 type PayloadObservation struct {
-	SessionID  string      `json:"session_id"`
+	TaskID     string      `json:"task_id"`
 	StepID     string      `json:"step_id"`
 	Capability string      `json:"capability"`
 	Tool       string      `json:"tool"`
-	Obs        interface{} `json:"obs"`
-}
-
-type PayloadStepCompleted struct {
-	SessionID string `json:"session_id"`
+	Obs        Observation `json:"obs"`
 }
 
 type PayloadStepCapabilityRetry struct {
-	SessionID         string `json:"session_id"`
+	TaskID            string `json:"task_id"`
 	StepID            string `json:"step_id"`
 	ExcludeCapability string `json:"exclude_capability"`
 }
 
 type PayloadTrajectoryCheck struct {
-	SessionID string `json:"session_id"`
+	TaskID string `json:"task_id"`
 }
 
 type PayloadTurnFinalized struct {
-	SessionID string `json:"session_id"`
+	TaskID string `json:"task_id"`
 }

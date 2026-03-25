@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -15,6 +16,9 @@ import (
 
 type App struct {
 	Dispatcher *engine.Dispatcher
+
+	// ConversationID when set: single shared task key for all ingress (see config.Workspace.ConversationID).
+	ConversationID string
 
 	Telegram   *telegram.Ingress
 	HTTPServer *http.Server
@@ -40,34 +44,43 @@ func NewFromWorkspace(ctx context.Context, workspaceRoot string, cfg *config.Wor
 
 	d, err := engine.NewDispatcher(ctx, mcpRouter, cfg.OpenAI, dataDB, cfg.GraphPathMode, cfg.SkillLearnMinPlanSteps, cfg.SkillLearnMinSuccessCount)
 	if err != nil {
-		_ = dataDB.Close()
+		if cerr := dataDB.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("close data db: %w", cerr))
+		}
 		shutdown()
 		return nil, fmt.Errorf("octoplus: dispatcher: %w", err)
 	}
 	telegram, err := telegram.NewIngress(cfg.Telegram.BotToken, cfg.Telegram.DefaultChatID, cfg.Telegram.AllowedChatIDs)
 	if err != nil {
-		_ = dataDB.Close()
+		if cerr := dataDB.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("close data db: %w", cerr))
+		}
 		shutdown()
 		return nil, fmt.Errorf("octoplus: telegram ingress: %w", err)
 	}
 	a := &App{
-		Dispatcher: d,
-		dataDB:     dataDB,
-		shutdown:   shutdown,
-		Telegram:   telegram,
+		Dispatcher:     d,
+		ConversationID: cfg.ConversationID,
+		dataDB:         dataDB,
+		shutdown:       shutdown,
+		Telegram:       telegram,
 	}
 	a.HTTPServer = &http.Server{Addr: cfg.HTTP.Listen, Handler: a.HTTPHandler()}
 
 	return a, nil
 }
 
-func (a *App) Close() {
-	if a != nil && a.dataDB != nil {
-		_ = a.dataDB.Close()
+func (a *App) Close() error {
+	var err error
+	if a.dataDB != nil {
+		if cerr := a.dataDB.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("close data db: %w", cerr))
+		}
 		a.dataDB = nil
 	}
-	if a != nil && a.shutdown != nil {
+	if a.shutdown != nil {
 		a.shutdown()
 		a.shutdown = nil
 	}
+	return err
 }

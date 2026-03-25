@@ -7,23 +7,30 @@ import (
 	"log"
 
 	"github.com/OctoSucker/agent/internal/config"
-	"github.com/OctoSucker/agent/internal/runtime/cognition"
-	"github.com/OctoSucker/agent/internal/runtime/execution"
+	"github.com/OctoSucker/agent/internal/runtime/engine/execution"
+	judgepkg "github.com/OctoSucker/agent/internal/runtime/engine/judge"
+	"github.com/OctoSucker/agent/internal/runtime/engine/planning"
 	"github.com/OctoSucker/agent/internal/runtime/store/capability"
 	"github.com/OctoSucker/agent/internal/runtime/store/nodefailure"
 	"github.com/OctoSucker/agent/internal/runtime/store/recall"
 	routinggraph "github.com/OctoSucker/agent/internal/runtime/store/routing_graph"
-	"github.com/OctoSucker/agent/internal/runtime/store/session"
 	skill "github.com/OctoSucker/agent/internal/runtime/store/skill"
+	"github.com/OctoSucker/agent/internal/runtime/store/task"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
+const (
+	skillRouteThreshold = 0.9
+	graphRouteThreshold = 0.7
+	keywordConfidence   = 0.92
+)
+
 type Dispatcher struct {
-	Brain    *cognition.AgentBrain
+	Planner  *planning.Planner
+	Judge    *judgepkg.Judge
 	Executor *execution.AgentExecutor
-	handlers map[string]cognition.EventHandler
 	MaxSteps int
 }
 
@@ -42,82 +49,114 @@ func NewDispatcher(
 		return nil, err
 	}
 	gpm := ports.ParseGraphPathMode(graphPathMode)
-	sessions := session.NewSessionStore(sqlDB)
-	routeGraph := routinggraph.NewRoutingGraphFromCapabilityRegistry(capReg, sqlDB)
-	skills := skill.NewSkillRegistry(sqlDB)
-	nodeFailures := nodefailure.NewNodeFailureStats(sqlDB)
+	taskStore, err := task.NewTaskStore(sqlDB)
+	if err != nil {
+		return nil, fmt.Errorf("dispatcher: task store: %w", err)
+	}
+	routeGraph, err := routinggraph.NewRoutingGraphFromCapabilityRegistry(capReg, sqlDB)
+	if err != nil {
+		return nil, fmt.Errorf("dispatcher: routing graph: %w", err)
+	}
+	nodeFailures, err := nodefailure.NewNodeFailureStats(sqlDB)
+	if err != nil {
+		return nil, fmt.Errorf("dispatcher: node failures: %w", err)
+	}
 
 	plannerLLM := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
 	embedder := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
 	trajectoryLLM := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
-	recallCorpus := recall.NewRecallCorpus(embedder, sqlDB)
+	skills, err := skill.NewSkillRegistry(sqlDB, embedder)
+	if err != nil {
+		return nil, fmt.Errorf("dispatcher: skill registry: %w", err)
+	}
+	recallCorpus, err := recall.NewRecallCorpus(embedder, sqlDB)
+	if err != nil {
+		return nil, fmt.Errorf("dispatcher: recall corpus: %w", err)
+	}
 
 	d := &Dispatcher{
-		handlers: map[string]cognition.EventHandler{},
 		MaxSteps: 200,
-		Brain: cognition.NewAgentBrain(
-			sessions,
+		Planner: planning.NewPlanner(
+			skillRouteThreshold,
+			graphRouteThreshold,
+			keywordConfidence,
+			taskStore,
+			routeGraph,
+			skills,
+			nodeFailures,
+			recallCorpus,
+			plannerLLM,
+			capReg.AllCapabilities(),
+			mcpclient.PlannerToolAppendix(mcpRouter.CachedToolSpecs()),
+			capReg.ToolInputSchemasByName(),
+			gpm,
+		),
+		Judge: judgepkg.New(
+			taskStore,
 			routeGraph,
 			skills,
 			capReg,
-			mcpRouter,
-			plannerLLM,
-			embedder,
 			trajectoryLLM,
 			recallCorpus,
 			nodeFailures,
 			sqlDB,
-			gpm,
 			skillLearnMinPlanSteps,
 			skillLearnMinSuccessCount,
 		),
 		Executor: execution.NewAgentExecutor(
-			sessions,
+			taskStore,
 			routeGraph,
 			capReg,
 			mcpRouter,
 		),
 	}
 
-	d.registerDefaultHandlers()
 	return d, nil
 }
 
-func (d *Dispatcher) registerDefaultHandlers() {
-	if d == nil {
-		return
-	}
-	d.handlers = map[string]cognition.EventHandler{
-		ports.EvUserInput:           d.Brain.Planner.HandleUserInput,
-		ports.EvPlanCreated:         d.Executor.PlanExec.HandlePlanCreated,
-		ports.EvStepCompleted:       d.Executor.PlanExec.HandleStepCompleted,
-		ports.EvStepCapabilityRetry: d.Executor.PlanExec.HandleStepCapabilityRetry,
-		ports.EvToolCall:            d.Executor.ToolExec.HandleToolCall,
-		ports.EvObservationReady:    d.Brain.StepCritic.HandleObservationReady,
-		ports.EvTrajectoryCheck:     d.Brain.TrajectoryCritic.HandleTrajectoryCheck,
-		ports.EvTurnFinalized:       d.Brain.TurnFinalized.HandleTurnFinalized,
-	}
-}
-
-func (d *Dispatcher) Run(ctx context.Context, queue []ports.Event) error {
-	if d == nil {
-		return fmt.Errorf("engine: nil dispatcher")
-	}
-	n := 0
-	for len(queue) > 0 && n < d.MaxSteps {
-		evt := queue[0]
-		queue = queue[1:]
-		n++
-		h, ok := d.handlers[evt.Type]
-		if !ok {
-			continue
+func (d *Dispatcher) Run(ctx context.Context, event ports.Event) error {
+	evt := event
+	for n := 1; n <= d.MaxSteps; n++ {
+		var (
+			out *ports.Event
+			err error
+		)
+		switch evt.Type {
+		case ports.EvUserInput:
+			out, err = d.Planner.HandleUserInput(ctx, evt)
+		case ports.EvSkillPlanRequested:
+			out, err = d.Planner.HandleSkillPlanRequested(ctx, evt)
+		case ports.EvLLMPlanRequested:
+			out, err = d.Planner.HandleLLMPlanRequested(ctx, evt)
+		case ports.EvPlanProgressed:
+			out, err = d.Executor.PlanExec.HandlePlanProgressed(ctx, evt)
+		case ports.EvStepCapabilityRetry:
+			out, err = d.Executor.PlanExec.HandleStepCapabilityRetry(ctx, evt)
+		case ports.EvToolCall:
+			out, err = d.Executor.ToolExec.HandleToolCall(ctx, evt)
+		case ports.EvObservationReady:
+			out, err = d.Judge.StepCritic.HandleObservationReady(ctx, evt)
+		case ports.EvTrajectoryCheck:
+			out, err = d.Judge.TrajectoryCritic.HandleTrajectoryCheck(ctx, evt)
+		case ports.EvTurnFinalized:
+			if err := d.Judge.Learner.RecordSkillLearning(ctx, evt); err != nil {
+				log.Printf("engine.Dispatcher.Run: record skill learning: %v", err)
+			}
+			if err := d.Judge.RecallArchiver.ArchiveRecall(ctx, evt); err != nil {
+				log.Printf("engine.Dispatcher.Run: archive recall: %v", err)
+			}
+			out = nil
+		default:
+			return nil
 		}
-		out, err := h(ctx, evt)
 		if err != nil {
 			log.Printf("engine.Dispatcher.Run: abort event=%s iter=%d err=%v", evt.Type, n, err)
 			return err
 		}
-		queue = append(queue, out...)
+		if out == nil {
+			return nil
+		}
+		evt = *out
 	}
 	return nil
 }

@@ -21,7 +21,7 @@ func mcpResultToPorts(res *mcp.CallToolResult) ports.ToolResult {
 		return ports.ToolResult{OK: false, Output: msg, Err: errors.New(msg)}
 	}
 	if res.StructuredContent != nil {
-		return ports.ToolResult{OK: true, Output: res.StructuredContent}
+		return ports.ToolResult{OK: true, Output: fmt.Sprintf("%v", res.StructuredContent)}
 	}
 	text := joinTextContent(res.Content)
 	return ports.ToolResult{OK: true, Output: text}

@@ -28,9 +28,13 @@ func propertyKeysFromSchema(schema map[string]any) (allowed map[string]struct{},
 	rawProps, has := schema["properties"]
 	if !has || rawProps == nil {
 		if typ, _ := schema["type"].(string); typ == "object" {
-			if ap, ok := schema["additionalProperties"].(bool); ok && !ap {
-				return map[string]struct{}{}, true
+			if ap, ok := schema["additionalProperties"].(bool); ok && ap {
+				return nil, false
 			}
+			// No property list: treat as empty object (MCP tools with no inputs). JSON Schema
+			// would default additionalProperties elsewhere; for planner we require explicit
+			// additionalProperties:true to allow arbitrary keys.
+			return map[string]struct{}{}, true
 		}
 		return nil, false
 	}

@@ -13,7 +13,6 @@ func NewBotAPI(cfg Config) (*tgbotapi.BotAPI, error) {
 
 func RegisterTools(srv *mcp.Server, api *tgbotapi.BotAPI, cfg Config) {
 	registerTelegramTools(srv, api, cfg)
-	registerPlanTools(srv)
 }
 
 func NewMCPServer(cfg Config, api *tgbotapi.BotAPI) *mcp.Server {

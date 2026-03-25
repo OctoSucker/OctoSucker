@@ -1,4 +1,5 @@
 {
+  "conversation_id": "owner",
   "graph_path_mode": "greedy",
   "skill_learn_min_plan_steps": 3,
   "skill_learn_min_success_count": 2,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strconv"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -28,12 +27,15 @@ func splitMessages(s string) []string {
 	return out
 }
 
-func (c Ingress) RunPoll(ctx context.Context, run func(context.Context, string, string) (string, error)) error {
+// OnTelegramMessage is invoked for each allowed text message; chatID is the sender chat for replies.
+type OnTelegramMessage func(ctx context.Context, chatID int64, text string) (string, error)
+
+func (c Ingress) RunPoll(ctx context.Context, onMessage OnTelegramMessage) error {
 	bot, err := tgbotapi.NewBotAPI(c.Token)
 	if err != nil {
 		return fmt.Errorf("telegram ingress: bot: %w", err)
 	}
-	log.Printf("telegram ingress: long poll @%s (session_id = chat_id string, same queue as POST /run)", bot.Self.UserName)
+	log.Printf("telegram ingress: long poll @%s (shared conversation_id in config uses same TaskStore key as HTTP)", bot.Self.UserName)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -64,10 +66,11 @@ func (c Ingress) RunPoll(ctx context.Context, run func(context.Context, string, 
 				log.Printf("telegram ingress: drop chat_id=%d (not allowed)", chatID)
 				continue
 			}
-			sid := strconv.FormatInt(chatID, 10)
-			reply, runErr := run(ctx, sid, msg.Text)
+			reply, runErr := onMessage(ctx, chatID, msg.Text)
 			if runErr != nil {
-				_, _ = bot.Send(tgbotapi.NewMessage(chatID, "error: "+runErr.Error()))
+				if _, err := bot.Send(tgbotapi.NewMessage(chatID, "error: "+runErr.Error())); err != nil {
+					log.Printf("telegram ingress: send error message chat_id=%d: %v", chatID, err)
+				}
 				continue
 			}
 			for _, part := range splitMessages(reply) {

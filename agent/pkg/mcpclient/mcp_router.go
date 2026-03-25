@@ -2,7 +2,9 @@ package mcpclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/OctoSucker/agent/pkg/ports"
@@ -33,8 +35,14 @@ func ConnectMCPRouter(ctx context.Context, endpoints []string) (*MCPRouter, erro
 	for _, ep := range endpoints {
 		r, err := Connect(ctx, ep)
 		if err != nil {
+			var closeErr error
 			for _, x := range runners {
-				_ = x.Close()
+				if cerr := x.Close(); cerr != nil {
+					closeErr = errors.Join(closeErr, cerr)
+				}
+			}
+			if closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("mcpclient.ConnectMCPRouter: cleanup: %w", closeErr))
 			}
 			return nil, fmt.Errorf("mcpclient.ConnectMCPRouter %q: %w", ep, err)
 		}
@@ -122,5 +130,9 @@ func ConnectForApp(ctx context.Context, endpoints []string) (*MCPRouter, func(),
 	if err != nil {
 		return nil, nil, err
 	}
-	return router, func() { _ = router.Close() }, nil
+	return router, func() {
+		if err := router.Close(); err != nil {
+			log.Printf("mcpclient: router close: %v", err)
+		}
+	}, nil
 }

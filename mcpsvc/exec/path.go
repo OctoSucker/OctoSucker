@@ -23,8 +23,12 @@ func normalizeRoots(paths []string) ([]string, error) {
 			return nil, fmt.Errorf("invalid workspace_dir %q: %w", s, err)
 		}
 		abs = filepath.Clean(abs)
-		if err := os.MkdirAll(abs, 0755); err != nil {
-			return nil, fmt.Errorf("create workspace_dir %q: %w", abs, err)
+		st, err := os.Stat(abs)
+		if err != nil {
+			return nil, fmt.Errorf("workspace_dir %q: %w (directory must already exist)", abs, err)
+		}
+		if !st.IsDir() {
+			return nil, fmt.Errorf("workspace_dir %q is not a directory", abs)
 		}
 		canonical, err := filepath.EvalSymlinks(abs)
 		if err != nil {
@@ -83,9 +87,11 @@ func resolveWorkDir(workDir string, roots []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("work_dir %q does not exist or cannot be resolved: %w", workDir, err)
 		}
+		canonical = filepath.Clean(canonical)
 		for _, r := range roots {
 			if isUnderRoot(canonical, filepath.Clean(r)) {
-				return abs, nil
+				// Always return canonical path to prevent symlink cwd escape.
+				return canonical, nil
 			}
 		}
 		return "", fmt.Errorf("work_dir %q resolves outside workspace_dirs", workDir)

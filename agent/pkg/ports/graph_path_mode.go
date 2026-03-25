@@ -9,7 +9,7 @@ type GraphPathMode string
 const (
 	// GraphPathGreedy: prefer next capability by local Frontier score (success × intent similarity × exploration; current default).
 	GraphPathGreedy GraphPathMode = "greedy"
-	// GraphPathGlobal: among feasible candidates, pick the one that minimizes w(last→c) + dist(c→finish) with learned edge weights (global-to-goal objective).
+	// GraphPathGlobal: among feasible candidates, pick the one with best global edge cost estimate.
 	GraphPathGlobal GraphPathMode = "global"
 )
 

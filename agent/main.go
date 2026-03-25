@@ -43,11 +43,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "octoplushttp:", err)
 		os.Exit(1)
 	}
-	defer a.Close()
+	defer func() {
+		if err := a.Close(); err != nil {
+			log.Printf("app close: %v", err)
+		}
+	}()
 
 	if a.Telegram != nil {
 		go func() {
-			err := a.Telegram.RunPoll(ctx, a.RunInput)
+			err := a.Telegram.RunPoll(ctx, func(ctx context.Context, chatID int64, text string) (string, error) {
+				return a.RunInput(ctx, "", text, chatID)
+			})
 			if err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("telegram poll: %v", err)
 			}
@@ -67,6 +73,8 @@ func main() {
 	shCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	if a.HTTPServer != nil {
-		_ = a.HTTPServer.Shutdown(shCtx)
+		if err := a.HTTPServer.Shutdown(shCtx); err != nil {
+			log.Printf("http shutdown: %v", err)
+		}
 	}
 }

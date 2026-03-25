@@ -2,6 +2,7 @@ package skill
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -13,9 +14,12 @@ import (
 	rtutils "github.com/OctoSucker/agent/utils"
 )
 
+// ErrNoSkillFromTask means the task has no extractable capability path / fingerprint for skill learning.
+var ErrNoSkillFromTask = errors.New("skill: no extractable skill from task")
+
 // SkillPlanVariant is the "Variant → Plan" layer:
 // same macro capability path (see SkillEntry) may have multiple concrete plans + runtime param schema.
-// Layer chain: Intent (session) → SkillEntry (trigger + path) → SkillPlanVariant → ports.Plan → PlanStep → tool.
+// Layer chain: Intent (task) → SkillEntry (trigger + path) → SkillPlanVariant → ports.Plan → PlanStep → tool.
 type SkillPlanVariant struct {
 	// --- Variant identity ---
 	ID string
@@ -114,9 +118,9 @@ func (e SkillEntry) PreferredPath() []string {
 	return pathOrCaps(e)
 }
 
-// SkillLearnCapKeyFromSession returns a stable key for the capability sequence (same as learned_* name suffix)
+// SkillLearnCapKeyFromTask returns a stable key for the capability sequence (same as learned_* name suffix)
 // and the number of plan steps. ok is false if there is no usable capability path.
-func SkillLearnCapKeyFromSession(sess *ports.Session) (capKey string, planStepCount int, ok bool) {
+func SkillLearnCapKeyFromTask(sess *ports.Task) (capKey string, planStepCount int, ok bool) {
 	if sess == nil || sess.Plan == nil || len(sess.Plan.Steps) == 0 {
 		return "", 0, false
 	}
@@ -133,9 +137,9 @@ func SkillLearnCapKeyFromSession(sess *ports.Session) (capKey string, planStepCo
 	return rtutils.HashPipeJoinedCapabilities(caps), planStepCount, true
 }
 
-func BuildSkillEntryFromSession(ctx context.Context, sess *ports.Session, embedder *llmclient.OpenAI) (SkillEntry, bool) {
+func BuildSkillEntryFromTask(ctx context.Context, sess *ports.Task, embedder *llmclient.OpenAI) (SkillEntry, error) {
 	if sess == nil || sess.Plan == nil || len(sess.Plan.Steps) == 0 {
-		return SkillEntry{}, false
+		return SkillEntry{}, ErrNoSkillFromTask
 	}
 	caps := make([]string, 0, len(sess.Plan.Steps))
 	for _, st := range sess.Plan.Steps {
@@ -144,15 +148,19 @@ func BuildSkillEntryFromSession(ctx context.Context, sess *ports.Session, embedd
 		}
 	}
 	if len(caps) == 0 {
-		return SkillEntry{}, false
+		return SkillEntry{}, ErrNoSkillFromTask
 	}
 	fp := rtutils.PlanSemanticFingerprint(sess.Plan)
 	if fp == "" {
-		return SkillEntry{}, false
+		return SkillEntry{}, ErrNoSkillFromTask
 	}
 	var emb []float32
-	if embedder != nil && sess.UserInput != "" {
-		emb, _ = embedder.Embed(ctx, sess.UserInput)
+	if embedder != nil && sess.UserInput.Text != "" {
+		var err error
+		emb, err = embedder.Embed(ctx, sess.UserInput.Text)
+		if err != nil {
+			return SkillEntry{}, fmt.Errorf("skill: embed user input: %w", err)
+		}
 	}
 	now := time.Now().Unix()
 	return SkillEntry{
@@ -165,7 +173,7 @@ func BuildSkillEntryFromSession(ctx context.Context, sess *ports.Session, embedd
 		}},
 		Attempts:  1,
 		Successes: 1,
-	}, true
+	}, nil
 }
 
 func CloneSkillPlan(p *ports.Plan) *ports.Plan {

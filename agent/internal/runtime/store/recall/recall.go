@@ -19,7 +19,7 @@ type RecallCorpus struct {
 	db         *sql.DB
 }
 
-func NewRecallCorpus(embedder *llmclient.OpenAI, db *sql.DB) *RecallCorpus {
+func NewRecallCorpus(embedder *llmclient.OpenAI, db *sql.DB) (*RecallCorpus, error) {
 	m := &RecallCorpus{
 		texts:      make([]string, 0),
 		embeddings: make([][]float32, 0),
@@ -27,9 +27,11 @@ func NewRecallCorpus(embedder *llmclient.OpenAI, db *sql.DB) *RecallCorpus {
 		db:         db,
 	}
 	if db != nil {
-		_ = m.loadAll()
+		if err := m.loadAll(); err != nil {
+			return nil, err
+		}
 	}
-	return m
+	return m, nil
 }
 
 func (m *RecallCorpus) Write(ctx context.Context, text string) error {
@@ -40,7 +42,10 @@ func (m *RecallCorpus) Write(ctx context.Context, text string) error {
 	var vec []float32
 	if m.Embedder != nil {
 		v, err := m.Embedder.Embed(ctx, t)
-		if err == nil && len(v) > 0 {
+		if err != nil {
+			return err
+		}
+		if len(v) > 0 {
 			vec = v
 		}
 	}
@@ -80,38 +85,42 @@ func (m *RecallCorpus) Recall(ctx context.Context, query string, k int) ([]strin
 	}
 	if m.Embedder != nil {
 		qvec, err := m.Embedder.Embed(ctx, query)
-		if err == nil && len(qvec) > 0 {
-			type scored struct {
-				idx   int
-				text  string
-				score float64
-			}
-			var cand []scored
-			for i, vec := range vectors {
-				if vec == nil {
-					continue
-				}
-				sim := rtutils.CosineFloat32(qvec, vec)
-				cand = append(cand, scored{i, texts[i], sim})
-			}
-			sort.SliceStable(cand, func(a, b int) bool {
-				if cand[a].score != cand[b].score {
-					return cand[a].score > cand[b].score
-				}
-				return cand[a].idx > cand[b].idx
-			})
-			var out []string
-			seen := make(map[string]struct{})
-			for i := 0; i < len(cand) && len(out) < k; i++ {
-				ch := cand[i].text
-				if _, dup := seen[ch]; dup {
-					continue
-				}
-				seen[ch] = struct{}{}
-				out = append(out, ch)
-			}
-			return out, nil
+		if err != nil {
+			return nil, err
 		}
+		if len(qvec) == 0 {
+			return nil, nil
+		}
+		type scored struct {
+			idx   int
+			text  string
+			score float64
+		}
+		var cand []scored
+		for i, vec := range vectors {
+			if vec == nil {
+				continue
+			}
+			sim := rtutils.CosineFloat32(qvec, vec)
+			cand = append(cand, scored{i, texts[i], sim})
+		}
+		sort.SliceStable(cand, func(a, b int) bool {
+			if cand[a].score != cand[b].score {
+				return cand[a].score > cand[b].score
+			}
+			return cand[a].idx > cand[b].idx
+		})
+		var out []string
+		seen := make(map[string]struct{})
+		for i := 0; i < len(cand) && len(out) < k; i++ {
+			ch := cand[i].text
+			if _, dup := seen[ch]; dup {
+				continue
+			}
+			seen[ch] = struct{}{}
+			out = append(out, ch)
+		}
+		return out, nil
 	}
 	ql := strings.ToLower(query)
 	terms := rtutils.RecallLexicalTerms(query)

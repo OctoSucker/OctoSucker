@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,15 +47,21 @@ func OpenAgentDB(workspaceRoot string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1) // SQLite: avoid writer lock contention across pools
 	if err := db.Ping(); err != nil {
-		_ = db.Close()
+		if cerr := db.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("close sqlite after ping failure: %w", cerr))
+		}
 		return nil, fmt.Errorf("store: ping sqlite: %w", err)
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		_ = db.Close()
+		if cerr := db.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("close sqlite after pragma failure: %w", cerr))
+		}
 		return nil, fmt.Errorf("store: pragma foreign_keys: %w", err)
 	}
 	if err := migrateAgentDB(db); err != nil {
-		_ = db.Close()
+		if cerr := db.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("close sqlite after migration failure: %w", cerr))
+		}
 		return nil, err
 	}
 	return db, nil

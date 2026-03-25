@@ -2,6 +2,7 @@ package mcpclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -45,7 +46,9 @@ func Connect(ctx context.Context, endpoint string) (*Runner, error) {
 	}
 	r.sess = sess
 	if err := r.refreshTools(ctx); err != nil {
-		_ = sess.Close()
+		if cerr := sess.Close(); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("mcpclient: close session after refresh failure: %w", cerr))
+		}
 		return nil, err
 	}
 	return r, nil
@@ -132,13 +135,8 @@ func (r *Runner) ListCapabilities(ctx context.Context) (map[string]ports.Capabil
 }
 
 func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
-	return r.Run(ctx, ToolCall{Name: inv.Tool, Arguments: inv.Arguments})
-}
+	call := ToolCall{Name: inv.Tool, Arguments: inv.Arguments}
 
-func (r *Runner) Run(ctx context.Context, call ToolCall) (ports.ToolResult, error) {
-	if r == nil || r.sess == nil {
-		return ports.ToolResult{}, fmt.Errorf("mcpclient: runner not connected")
-	}
 	if err := r.refreshIfStale(ctx); err != nil {
 		log.Printf("mcpclient: list_tools refresh failed before CallTool tool=%q err=%v", call.Name, err)
 		return ports.ToolResult{}, err

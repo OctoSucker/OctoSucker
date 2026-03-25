@@ -1,45 +1,92 @@
 package skill
 
 import (
+	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/OctoSucker/agent/pkg/llmclient"
+	"github.com/OctoSucker/agent/pkg/ports"
 	rtutils "github.com/OctoSucker/agent/utils"
 )
 
 // SkillRegistry holds learned/static skills and match APIs; SQLite persistence is in skill_storage.go.
 type SkillRegistry struct {
-	mu      sync.RWMutex
-	entries []SkillEntry
-	db      *sql.DB
+	mu       sync.RWMutex
+	entries  []SkillEntry
+	db       *sql.DB
+	Embedder *llmclient.OpenAI
 	// VariantExplorationRate is ε for variant selection: with this probability a random usable variant
 	// is chosen instead of the scored best (only when ≥2 variants). 0 disables exploration.
 	VariantExplorationRate float64
 }
 
 // NewSkillRegistry loads skills from db when non-nil.
-func NewSkillRegistry(db *sql.DB) *SkillRegistry {
-	r := &SkillRegistry{entries: []SkillEntry{}, db: db, VariantExplorationRate: 0.2}
+func NewSkillRegistry(db *sql.DB, embedder *llmclient.OpenAI) (*SkillRegistry, error) {
+	r := &SkillRegistry{entries: []SkillEntry{}, db: db, Embedder: embedder, VariantExplorationRate: 0.2}
 	if db != nil {
-		_ = r.loadSkillsFromDB()
+		if err := r.loadSkillsFromDB(); err != nil {
+			return nil, err
+		}
 	}
-	return r
+	return r, nil
 }
 
-func (r *SkillRegistry) Register(e SkillEntry) {
+func (r *SkillRegistry) EmbedText(ctx context.Context, text string) ([]float32, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	if r.Embedder == nil {
+		return nil, fmt.Errorf("skill registry: embedder not configured")
+	}
+	emb, err := r.Embedder.Embed(ctx, text)
+	if err != nil {
+		return nil, fmt.Errorf("skill registry: embed text: %w", err)
+	}
+	return emb, nil
+}
+
+func (r *SkillRegistry) MatchByText(ctx context.Context, text string, k int) ([]SkillEntry, error) {
+	emb, err := r.EmbedText(ctx, text)
+	if err != nil {
+		return nil, err
+	}
+	return r.MatchByEmbedding(emb, k), nil
+}
+
+// MatchBestByText returns the best executable embedding hit, or nil when no valid hit exists.
+func (r *SkillRegistry) MatchBestByText(ctx context.Context, text string) (*SkillEntry, error) {
+	hits, err := r.MatchByText(ctx, text, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(hits) == 0 || hits[0].SelectedPlan() == nil {
+		return nil, nil
+	}
+	h := hits[0]
+	return &h, nil
+}
+
+func (r *SkillRegistry) BuildEntryFromTask(ctx context.Context, t *ports.Task) (SkillEntry, error) {
+	return BuildSkillEntryFromTask(ctx, t, r.Embedder)
+}
+
+func (r *SkillRegistry) Register(e SkillEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e = cloneSkillEntryForStorage(e)
 	e.MatchScore = 0
 	e.SelectedVariantID = ""
 	r.entries = append(r.entries, e)
-	r.persistSkillsDBLocked()
+	return r.persistSkillsDBLocked()
 }
 
-func (r *SkillRegistry) MergeOrAdd(e SkillEntry) {
+func (r *SkillRegistry) MergeOrAdd(e SkillEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	e = cloneSkillEntryForStorage(e)
@@ -55,12 +102,11 @@ func (r *SkillRegistry) MergeOrAdd(e SkillEntry) {
 			for _, nv := range e.Variants {
 				mergeSkillVariant(&r.entries[i], nv)
 			}
-			r.persistSkillsDBLocked()
-			return
+			return r.persistSkillsDBLocked()
 		}
 	}
 	r.entries = append(r.entries, e)
-	r.persistSkillsDBLocked()
+	return r.persistSkillsDBLocked()
 }
 
 func mergeSkillVariant(skill *SkillEntry, nv SkillPlanVariant) {
@@ -89,7 +135,7 @@ func mergeSkillVariant(skill *SkillEntry, nv SkillPlanVariant) {
 }
 
 // MarkUsed updates skill-level LastUsedAt; if variantID is non-empty, also updates that variant's LastUsedUnix.
-func (r *SkillRegistry) MarkUsed(skillName, variantID string) {
+func (r *SkillRegistry) MarkUsed(skillName, variantID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
@@ -109,7 +155,7 @@ func (r *SkillRegistry) MarkUsed(skillName, variantID string) {
 		}
 		break
 	}
-	r.persistSkillsDBLocked()
+	return r.persistSkillsDBLocked()
 }
 
 func (r *SkillRegistry) Match(userText string) []string {
@@ -157,6 +203,15 @@ func (r *SkillRegistry) KeywordPlanEntry(userText string) (SkillEntry, bool) {
 	return SkillEntry{}, false
 }
 
+// KeywordPlanHit returns the first keyword-matched entry that has an executable selected plan, or nil.
+func (r *SkillRegistry) KeywordPlanHit(userText string) *SkillEntry {
+	e, ok := r.KeywordPlanEntry(userText)
+	if !ok || e.SelectedPlan() == nil {
+		return nil
+	}
+	return &e
+}
+
 func (r *SkillRegistry) MatchByEmbedding(embedding []float32, k int) []SkillEntry {
 	if len(embedding) == 0 || k <= 0 {
 		return nil
@@ -194,10 +249,14 @@ func (r *SkillRegistry) MatchByEmbedding(embedding []float32, k int) []SkillEntr
 }
 
 // RecordTurn updates skill stats from keywords / embedding, or from an attributed skill+variant when provided.
-func (r *SkillRegistry) RecordTurn(userText string, success bool, queryEmbedding []float32, minEmbeddingSim float64, activeSkillName, activeVariantID string) {
+func (r *SkillRegistry) RecordTurn(userText string, success bool, queryEmbedding []float32, minEmbeddingSim float64, activeSkillName, activeVariantID string) (err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	defer r.persistSkillsDBLocked()
+	defer func() {
+		if perr := r.persistSkillsDBLocked(); perr != nil {
+			err = errors.Join(err, perr)
+		}
+	}()
 
 	if activeSkillName != "" && activeVariantID != "" {
 		for i := range r.entries {
@@ -240,7 +299,7 @@ func (r *SkillRegistry) RecordTurn(userText string, success bool, queryEmbedding
 		}
 	}
 	if len(queryEmbedding) == 0 || minEmbeddingSim <= 0 {
-		return
+		return nil
 	}
 	bestI := -1
 	var bestSim float64
@@ -263,4 +322,5 @@ func (r *SkillRegistry) RecordTurn(userText string, success bool, queryEmbedding
 			r.entries[bestI].Successes++
 		}
 	}
+	return nil
 }

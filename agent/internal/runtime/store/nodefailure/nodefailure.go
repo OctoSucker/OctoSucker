@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/OctoSucker/agent/pkg/ports"
 )
 
 // NodeFailureStats aggregates deduplicated node-level (capability + tool + context) failures for planning hints.
@@ -22,19 +24,19 @@ type NodeFailureStats struct {
 	MaxHintLines int
 }
 
-func NewNodeFailureStats(db *sql.DB) *NodeFailureStats {
-	return &NodeFailureStats{db: db, MinFailuresForHint: 2, MaxHintLines: 12}
+func NewNodeFailureStats(db *sql.DB) (*NodeFailureStats, error) {
+	if db == nil {
+		return nil, fmt.Errorf("nodefailure: db is required")
+	}
+	return &NodeFailureStats{db: db, MinFailuresForHint: 2, MaxHintLines: 12}, nil
 }
 
 func (n *NodeFailureStats) RecordFailure(capability, tool, fromCap, errMsg string) error {
-	if n == nil || n.db == nil {
-		return nil
-	}
 	capability = strings.TrimSpace(capability)
 	tool = strings.TrimSpace(tool)
 	fromCap = strings.TrimSpace(fromCap)
 	if capability == "" || tool == "" {
-		return nil
+		return fmt.Errorf("nodefailure: capability and tool are required")
 	}
 	sig := normalizeErrorSignature(errMsg)
 	if sig == "" {
@@ -47,12 +49,24 @@ func (n *NodeFailureStats) RecordFailure(capability, tool, fromCap, errMsg strin
 	return n.dbUpsertFailure(key, capability, tool, fromCap, sig, now)
 }
 
-func (n *NodeFailureStats) HintForCapabilities(caps []string, minCount, maxLines int) string {
-	if n == nil || n.db == nil || len(caps) == 0 || maxLines <= 0 {
+func (n *NodeFailureStats) HintForCapabilities(validPlanCapabilities map[string]ports.Capability) string {
+	if len(validPlanCapabilities) == 0 {
 		return ""
 	}
+	caps := make([]string, 0, len(validPlanCapabilities))
+	for id := range validPlanCapabilities {
+		caps = append(caps, id)
+	}
+	minCount := n.MinFailuresForHint
 	if minCount < 1 {
-		minCount = 1
+		minCount = 2
+	}
+	maxLines := n.MaxHintLines
+	if maxLines <= 0 {
+		maxLines = 12
+	}
+	if len(caps) == 0 {
+		return ""
 	}
 	uniq := map[string]struct{}{}
 	var list []string
@@ -78,21 +92,6 @@ func (n *NodeFailureStats) HintForCapabilities(caps []string, minCount, maxLines
 		return ""
 	}
 	return formatHintBlock(rows, maxLines)
-}
-
-func (n *NodeFailureStats) PlannerHint(caps []string) string {
-	if n == nil {
-		return ""
-	}
-	min := n.MinFailuresForHint
-	if min < 1 {
-		min = 2
-	}
-	max := n.MaxHintLines
-	if max <= 0 {
-		max = 12
-	}
-	return n.HintForCapabilities(caps, min, max)
 }
 
 func normalizeErrorSignature(s string) string {

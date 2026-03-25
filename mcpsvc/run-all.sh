@@ -12,7 +12,6 @@ if [[ -f "$ROOT/.env" ]]; then
 fi
 
 TELEGRAM_ADDR="${MCP_TELEGRAM_LISTEN:-:8765}"
-EXEC_ADDR="${MCP_EXEC_LISTEN:-:8766}"
 
 mcp_http_base() {
 	local a="$1"
@@ -51,16 +50,7 @@ else
 	((++started)) || true
 fi
 
-if [[ -n "${MCP_RUN_ALL_SKIP_EXEC:-}" ]]; then
-	echo "mcp-run-all: skip mcp-exec (MCP_RUN_ALL_SKIP_EXEC set)" >&2
-elif [[ -z "${EXEC_WORKSPACE_DIRS:-}" ]]; then
-	echo "mcp-run-all: skip mcp-exec (set EXEC_WORKSPACE_DIRS or MCP_RUN_ALL_SKIP_EXEC=1)" >&2
-else
-	echo "mcp-run-all: mcp-exec -> go run ... -listen $EXEC_ADDR" >&2
-	go run ./mcpsvc/exec/cmd/mcp-exec -listen "$EXEC_ADDR" &
-	pids+=("$!")
-	((++started)) || true
-fi
+echo "mcp-run-all: mcp-exec is not started here; use Docker Compose (see mcpsvc/README.md)" >&2
 
 if [[ "$started" -eq 0 ]]; then
 	echo "mcp-run-all: nothing to run; configure env or unset SKIP flags" >&2
@@ -70,10 +60,7 @@ fi
 echo "mcp-run-all: pids ${pids[*]} — Ctrl+C stops all. Agent example:" >&2
 TG_URL="$(mcp_http_base "$TELEGRAM_ADDR")"
 echo "  export OCTOPLUS_MCP_ENDPOINT=$TG_URL" >&2
-if [[ "$started" -gt 1 ]]; then
-	EX_URL="$(mcp_http_base "$EXEC_ADDR")"
-	echo "  # multi: OCTOPLUS_MCP_ENDPOINT=$TG_URL,$EX_URL" >&2
-fi
+echo "  # mcp-exec: start via Compose, then comma-separate its HTTP base URL in OCTOPLUS_MCP_ENDPOINT" >&2
 
 rc=0
 for pid in "${pids[@]}"; do

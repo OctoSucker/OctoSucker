@@ -2,12 +2,13 @@ package utils
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 )
 
-// HTTPNormalizeChatSessionID prefixes non-http- session ids for HTTP channel separation.
-func HTTPNormalizeChatSessionID(s string) string {
+// HTTPNormalizeChatTaskID prefixes non-http- task ids for HTTP channel separation.
+func HTTPNormalizeChatTaskID(s string) string {
 	if strings.HasPrefix(s, "http-") {
 		return s
 	}
@@ -15,8 +16,11 @@ func HTTPNormalizeChatSessionID(s string) string {
 }
 
 // WriteJSON sets Content-Type application/json, status, and encodes v.
-func WriteJSON(w http.ResponseWriter, status int, v any) {
+func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		return fmt.Errorf("write json: %w", err)
+	}
+	return nil
 }

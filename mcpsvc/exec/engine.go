@@ -11,11 +11,26 @@ const maxCapture = 512 * 1024
 
 type Engine struct {
 	cfg      Config
-	executor *LocalExecutor
+	executor Executor
 }
 
 func NewEngine(cfg Config) *Engine {
-	return &Engine{cfg: cfg, executor: &LocalExecutor{}}
+	bind := cfg.HostBindRoots
+	return &Engine{
+		cfg: cfg,
+		executor: &DockerExecutor{
+			mgr: sandboxContainerManager{
+				runtime:      cfg.Container.Runtime,
+				image:        cfg.Container.Image,
+				name:         cfg.Container.Name,
+				workspaceDir: cfg.Container.WorkspaceDir,
+				readOnlyRoot: cfg.Container.ReadOnlyRoot,
+				roots:        cfg.Roots,
+				bindRoots:    bind,
+			},
+			containerUser: cfg.Container.User,
+		},
+	}
 }
 
 func (e *Engine) isBlacklisted(cmdLine string) bool {
@@ -101,11 +116,7 @@ func (e *Engine) RunCommand(ctx context.Context, command, workDir string, timeou
 	for k, v := range env {
 		envList = append(envList, k+"="+v)
 	}
-	limits := e.cfg.SandboxLimits
-	if !e.cfg.SandboxEnabled {
-		limits = SandboxLimits{}
-	}
-	result, err := e.executor.Run(ctx, argv, wd, envList, to, limits)
+	result, err := e.executor.Run(ctx, argv, wd, envList, to, SandboxLimits{})
 	if err != nil {
 		return nil, fmt.Errorf("run_command: %w", err)
 	}

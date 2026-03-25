@@ -23,7 +23,7 @@ type routingRecentDTO struct {
 }
 
 func (s *RoutingGraph) loadFromDB() error {
-	if s == nil || s.db == nil {
+	if s.db == nil {
 		return nil
 	}
 	edges, runs, recent, err := loadRoutingGraphStateSQLite(s.db)
@@ -42,31 +42,33 @@ func (s *RoutingGraph) loadFromDB() error {
 	return nil
 }
 
-func (s *RoutingGraph) persistEdgeAndRecentLocked(k edgeKey, e *portsEdge) {
+func (s *RoutingGraph) persistEdgeAndRecentLocked(k edgeKey, e *portsEdge) error {
 	if s.db == nil || e == nil {
-		return
+		return nil
 	}
-	_ = upsertRoutingEdgeSQLite(s.db, k, e)
-	_ = saveRoutingRecentSQLite(s.db, s.recentTransitions)
+	if err := upsertRoutingEdgeSQLite(s.db, k, e); err != nil {
+		return err
+	}
+	return saveRoutingRecentSQLite(s.db, s.recentTransitions)
 }
 
-func (s *RoutingGraph) persistTotalRunsLocked() {
+func (s *RoutingGraph) persistTotalRunsLocked() error {
 	if s.db == nil {
-		return
+		return nil
 	}
-	_ = saveRoutingTotalRunsSQLite(s.db, s.totalRuns)
+	return saveRoutingTotalRunsSQLite(s.db, s.totalRuns)
 }
 
-func (s *RoutingGraph) persistAllEdgesLocked() {
+func (s *RoutingGraph) persistAllEdgesLocked() error {
 	if s.db == nil {
-		return
+		return nil
 	}
-	_ = replaceAllRoutingEdgesSQLite(s.db, s.edges)
+	return replaceAllRoutingEdgesSQLite(s.db, s.edges)
 }
 
-func (s *RoutingGraph) persistTrajectoryLocked(path []ports.TransitionStep) {
+func (s *RoutingGraph) persistTrajectoryLocked(path []ports.TransitionStep) error {
 	if s.db == nil {
-		return
+		return nil
 	}
 	for _, step := range path {
 		k := edgeKey{from: step.From, to: step.To}
@@ -74,9 +76,11 @@ func (s *RoutingGraph) persistTrajectoryLocked(path []ports.TransitionStep) {
 		if e == nil {
 			continue
 		}
-		_ = upsertRoutingEdgeSQLite(s.db, k, e)
+		if err := upsertRoutingEdgeSQLite(s.db, k, e); err != nil {
+			return err
+		}
 	}
-	s.persistTotalRunsLocked()
+	return s.persistTotalRunsLocked()
 }
 
 func loadRoutingGraphStateSQLite(db *sql.DB) (map[edgeKey]*portsEdge, int64, []contextTransition, error) {

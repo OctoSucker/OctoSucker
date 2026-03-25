@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"strings"
@@ -49,7 +50,8 @@ func StepSummariesByStepID(tr []ports.StepTrace) map[string]string {
 	return out
 }
 
-// BuildTemplateArgMap builds keys for {{step_<id>}}, {{prev_<id>}}, {{user_input}}, {{last}} in plan JSON.
+// BuildTemplateArgMap builds keys for {{step_<id>}}, {{prev_<id>}}, {{user_input}}, {{last}}
+// and compatibility keys like {{steps.<id>.<field>}} when a step summary is JSON object text.
 func BuildTemplateArgMap(inv InvocationContext) map[string]any {
 	out := map[string]any{}
 	if s := strings.TrimSpace(inv.UserInput); s != "" {
@@ -62,6 +64,17 @@ func BuildTemplateArgMap(inv InvocationContext) map[string]any {
 		}
 		out["step_"+id] = txt
 		out["prev_"+id] = txt
+		// Backward compatibility for templates like {{steps.1.stdout}}.
+		out["steps."+id] = txt
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(txt), &obj); err == nil {
+			for k, v := range obj {
+				if strings.TrimSpace(k) == "" {
+					continue
+				}
+				out["steps."+id+"."+k] = v
+			}
+		}
 	}
 	if len(inv.Trace) > 0 {
 		last := inv.Trace[len(inv.Trace)-1]
@@ -137,9 +150,9 @@ func InvokeSkillVariant(v *SkillPlanVariant, inv InvocationContext) (*ports.Plan
 	return InstantiateSkillPlan(v.Plan, args), nil
 }
 
-// RenderPlanStepArguments clones a plan step's arguments and substitutes {{keys}} using current session trace and user input.
+// RenderPlanStepArguments clones a plan step's arguments and substitutes {{keys}} using current task trace and user input.
 // Use before MCP Invoke so templates can reference prior steps ({{step_1}}, {{last}}, etc.).
-func RenderPlanStepArguments(sess *ports.Session, stepID string) map[string]any {
+func RenderPlanStepArguments(sess *ports.Task, stepID string) map[string]any {
 	if sess == nil || sess.Plan == nil {
 		return nil
 	}
@@ -151,7 +164,7 @@ func RenderPlanStepArguments(sess *ports.Session, stepID string) map[string]any 
 		if len(st.Arguments) == 0 {
 			return nil
 		}
-		inv := InvocationContext{UserInput: sess.UserInput, Trace: sess.Trace, Plan: sess.Plan}
+		inv := InvocationContext{UserInput: sess.UserInput.Text, Trace: sess.Trace, Plan: sess.Plan}
 		tmpl := BuildTemplateArgMap(inv)
 		return renderArgumentMap(maps.Clone(st.Arguments), tmpl)
 	}

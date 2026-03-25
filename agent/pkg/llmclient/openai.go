@@ -2,7 +2,9 @@ package llmclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -57,6 +59,25 @@ func (c *OpenAI) Complete(ctx context.Context, system string, user string) (stri
 		return "", fmt.Errorf("llmclient.OpenAI: empty completion choices")
 	}
 	return res.Choices[0].Message.Content, nil
+}
+
+func (c *OpenAI) CompleteJSON(ctx context.Context, system string, user string, out any) error {
+	if out == nil {
+		return fmt.Errorf("llmclient.OpenAI: out is nil")
+	}
+	raw, err := c.Complete(ctx, system, user)
+	if err != nil {
+		return err
+	}
+	content := strings.TrimSpace(raw)
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	if err := json.Unmarshal([]byte(content), out); err != nil {
+		return fmt.Errorf("llmclient.OpenAI: unmarshal completion json: %w", err)
+	}
+	return nil
 }
 
 func (c *OpenAI) Embed(ctx context.Context, text string) ([]float32, error) {

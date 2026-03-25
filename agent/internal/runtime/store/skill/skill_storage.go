@@ -11,6 +11,17 @@ import (
 	rtutils "github.com/OctoSucker/agent/utils"
 )
 
+func mustUnmarshalStringSlice(src []byte, field string) ([]string, error) {
+	if len(strings.TrimSpace(string(src))) == 0 {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal(src, &out); err != nil {
+		return nil, fmt.Errorf("%s: %w", field, err)
+	}
+	return out, nil
+}
+
 // Table names must stay aligned with store/tables.go migrate.
 const (
 	sqliteTableSkills             = "skills"
@@ -37,10 +48,18 @@ func (r *SkillRegistry) loadSkillsFromDB() error {
 		if err := rows.Scan(&name, &kwj, &capsj, &pathj, &emb, &att, &suc, &lu); err != nil {
 			return err
 		}
-		var kw, caps, path []string
-		_ = json.Unmarshal([]byte(kwj), &kw)
-		_ = json.Unmarshal([]byte(capsj), &caps)
-		_ = json.Unmarshal([]byte(pathj), &path)
+		kw, err := mustUnmarshalStringSlice([]byte(kwj), "keywords_json")
+		if err != nil {
+			return fmt.Errorf("skill %s: %w", name, err)
+		}
+		caps, err := mustUnmarshalStringSlice([]byte(capsj), "caps_json")
+		if err != nil {
+			return fmt.Errorf("skill %s: %w", name, err)
+		}
+		path, err := mustUnmarshalStringSlice([]byte(pathj), "path_json")
+		if err != nil {
+			return fmt.Errorf("skill %s: %w", name, err)
+		}
 		e := &SkillEntry{
 			Name:             name,
 			Keywords:         kw,
@@ -72,15 +91,17 @@ func (r *SkillRegistry) loadSkillsFromDB() error {
 		}
 		e := byName[sn]
 		if e == nil {
-			continue
+			return fmt.Errorf("skill_variants: unknown skill_name %q for variant %q", sn, vid)
 		}
 		var plan ports.Plan
 		if err := json.Unmarshal([]byte(planj), &plan); err != nil {
-			continue
+			return fmt.Errorf("skill %s variant %s plan_json: %w", sn, vid, err)
 		}
 		var params []SkillParamSpec
 		if strings.TrimSpace(paramsj) != "" {
-			_ = json.Unmarshal([]byte(paramsj), &params)
+			if err := json.Unmarshal([]byte(paramsj), &params); err != nil {
+				return fmt.Errorf("skill %s variant %s params_json: %w", sn, vid, err)
+			}
 		}
 		pl := plan
 		e.Variants = append(e.Variants, SkillPlanVariant{ID: vid, Plan: &pl, Params: params, Attempts: va, Successes: vs, LastUsedUnix: vlu})
@@ -100,27 +121,27 @@ func (r *SkillRegistry) loadSkillsFromDB() error {
 }
 
 // persistSkillsDBLocked replaces persisted skills; caller must hold r.mu (write lock).
-func (r *SkillRegistry) persistSkillsDBLocked() {
+func (r *SkillRegistry) persistSkillsDBLocked() error {
 	if r.db == nil {
-		return
+		return nil
 	}
 	tx, err := r.db.Begin()
 	if err != nil {
-		return
+		return err
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s`, sqliteTableSkillVariants)); err != nil {
-		return
+		return err
 	}
 	if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s`, sqliteTableSkills)); err != nil {
-		return
+		return err
 	}
 	for i := range r.entries {
 		if err := insertSkillTx(tx, r.entries[i]); err != nil {
-			return
+			return err
 		}
 	}
-	_ = tx.Commit()
+	return tx.Commit()
 }
 
 func insertSkillTx(tx *sql.Tx, e SkillEntry) error {
