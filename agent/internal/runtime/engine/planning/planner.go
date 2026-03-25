@@ -37,7 +37,7 @@ func NewPlanner(
 	skillRouteThreshold float64,
 	graphRouteThreshold float64,
 	keywordConfidence float64,
-	sessions *task.TaskStore,
+	tasks *task.TaskStore,
 	routeGraph *routinggraph.RoutingGraph,
 	skills *skill.SkillRegistry,
 	nodeFailures *nodefailure.NodeFailureStats,
@@ -64,7 +64,7 @@ Pick the capability that fits the user's request (e.g. questions about the bot o
 Use depends_on as array of prior step ids.`, exampleCap, strings.Join(ids, "|"))
 	}
 	return &Planner{
-		Tasks:                 sessions,
+		Tasks:                 tasks,
 		RouteGraph:            routeGraph,
 		Skills:                skills,
 		SkillRouteThreshold:   skillRouteThreshold,

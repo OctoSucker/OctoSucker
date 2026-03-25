@@ -120,13 +120,13 @@ func (e SkillEntry) PreferredPath() []string {
 
 // SkillLearnCapKeyFromTask returns a stable key for the capability sequence (same as learned_* name suffix)
 // and the number of plan steps. ok is false if there is no usable capability path.
-func SkillLearnCapKeyFromTask(sess *ports.Task) (capKey string, planStepCount int, ok bool) {
-	if sess == nil || sess.Plan == nil || len(sess.Plan.Steps) == 0 {
+func SkillLearnCapKeyFromTask(taskState *ports.Task) (capKey string, planStepCount int, ok bool) {
+	if taskState == nil || taskState.Plan == nil || len(taskState.Plan.Steps) == 0 {
 		return "", 0, false
 	}
-	planStepCount = len(sess.Plan.Steps)
-	caps := make([]string, 0, len(sess.Plan.Steps))
-	for _, st := range sess.Plan.Steps {
+	planStepCount = len(taskState.Plan.Steps)
+	caps := make([]string, 0, len(taskState.Plan.Steps))
+	for _, st := range taskState.Plan.Steps {
 		if st.Capability != "" {
 			caps = append(caps, st.Capability)
 		}
@@ -137,12 +137,12 @@ func SkillLearnCapKeyFromTask(sess *ports.Task) (capKey string, planStepCount in
 	return rtutils.HashPipeJoinedCapabilities(caps), planStepCount, true
 }
 
-func BuildSkillEntryFromTask(ctx context.Context, sess *ports.Task, embedder *llmclient.OpenAI) (SkillEntry, error) {
-	if sess == nil || sess.Plan == nil || len(sess.Plan.Steps) == 0 {
+func BuildSkillEntryFromTask(ctx context.Context, taskState *ports.Task, embedder *llmclient.OpenAI) (SkillEntry, error) {
+	if taskState == nil || taskState.Plan == nil || len(taskState.Plan.Steps) == 0 {
 		return SkillEntry{}, ErrNoSkillFromTask
 	}
-	caps := make([]string, 0, len(sess.Plan.Steps))
-	for _, st := range sess.Plan.Steps {
+	caps := make([]string, 0, len(taskState.Plan.Steps))
+	for _, st := range taskState.Plan.Steps {
 		if st.Capability != "" {
 			caps = append(caps, st.Capability)
 		}
@@ -150,14 +150,14 @@ func BuildSkillEntryFromTask(ctx context.Context, sess *ports.Task, embedder *ll
 	if len(caps) == 0 {
 		return SkillEntry{}, ErrNoSkillFromTask
 	}
-	fp := rtutils.PlanSemanticFingerprint(sess.Plan)
+	fp := rtutils.PlanSemanticFingerprint(taskState.Plan)
 	if fp == "" {
 		return SkillEntry{}, ErrNoSkillFromTask
 	}
 	var emb []float32
-	if embedder != nil && sess.UserInput.Text != "" {
+	if embedder != nil && taskState.UserInput.Text != "" {
 		var err error
-		emb, err = embedder.Embed(ctx, sess.UserInput.Text)
+		emb, err = embedder.Embed(ctx, taskState.UserInput.Text)
 		if err != nil {
 			return SkillEntry{}, fmt.Errorf("skill: embed user input: %w", err)
 		}
@@ -169,7 +169,7 @@ func BuildSkillEntryFromTask(ctx context.Context, sess *ports.Task, embedder *ll
 		Path:             append([]string(nil), caps...),
 		TriggerEmbedding: emb,
 		Variants: []SkillPlanVariant{{
-			ID: fp, Plan: CloneSkillPlan(sess.Plan), Attempts: 1, Successes: 1, LastUsedUnix: now,
+			ID: fp, Plan: CloneSkillPlan(taskState.Plan), Attempts: 1, Successes: 1, LastUsedUnix: now,
 		}},
 		Attempts:  1,
 		Successes: 1,

@@ -36,11 +36,11 @@ func (x *StepCritic) maxCapabilityFails() int {
 	return x.MaxFailsPerCapability
 }
 
-func (x *StepCritic) bumpCapabilityFailCount(sess *ports.Task, stepID, capability string) int {
-	if sess.CapabilityFailCount == nil {
-		sess.CapabilityFailCount = make(map[string]int)
+func (x *StepCritic) bumpCapabilityFailCount(taskState *ports.Task, stepID, capability string) int {
+	if taskState.CapabilityFailCount == nil {
+		taskState.CapabilityFailCount = make(map[string]int)
 	}
 	k := rtutils.CapabilityFailCountKey(stepID, capability)
-	sess.CapabilityFailCount[k]++
-	return sess.CapabilityFailCount[k]
+	taskState.CapabilityFailCount[k]++
+	return taskState.CapabilityFailCount[k]
 }

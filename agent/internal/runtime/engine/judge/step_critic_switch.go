@@ -7,12 +7,12 @@ import (
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
-func (x *StepCritic) trySwitchCapability(ctx context.Context, sess *ports.Task, exclude string) (string, error) {
+func (x *StepCritic) trySwitchCapability(ctx context.Context, taskState *ports.Task, exclude string) (string, error) {
 	if x.RouteGraph == nil || x.CapRegistry == nil {
 		return "", nil
 	}
-	rc := ports.RoutingContext{IntentText: sess.UserInput.Text}
-	frontier, err := x.RouteGraph.Frontier(ctx, rc, sess.LastCapability, 1)
+	rc := ports.RoutingContext{IntentText: taskState.UserInput.Text}
+	frontier, err := x.RouteGraph.Frontier(ctx, rc, taskState.LastCapability, 1)
 	if err != nil {
 		return "", fmt.Errorf("step_critic: Frontier: %w", err)
 	}
@@ -28,7 +28,7 @@ func (x *StepCritic) trySwitchCapability(ctx context.Context, sess *ports.Task, 
 			allow[capID] = true
 		}
 	}
-	for _, capID := range sess.SkillPriorCaps {
+	for _, capID := range taskState.SkillPriorCaps {
 		if capID != exclude {
 			allow[capID] = true
 		}

@@ -152,19 +152,19 @@ func InvokeSkillVariant(v *SkillPlanVariant, inv InvocationContext) (*ports.Plan
 
 // RenderPlanStepArguments clones a plan step's arguments and substitutes {{keys}} using current task trace and user input.
 // Use before MCP Invoke so templates can reference prior steps ({{step_1}}, {{last}}, etc.).
-func RenderPlanStepArguments(sess *ports.Task, stepID string) map[string]any {
-	if sess == nil || sess.Plan == nil {
+func RenderPlanStepArguments(taskState *ports.Task, stepID string) map[string]any {
+	if taskState == nil || taskState.Plan == nil {
 		return nil
 	}
-	for i := range sess.Plan.Steps {
-		if sess.Plan.Steps[i].ID != stepID {
+	for i := range taskState.Plan.Steps {
+		if taskState.Plan.Steps[i].ID != stepID {
 			continue
 		}
-		st := sess.Plan.Steps[i]
+		st := taskState.Plan.Steps[i]
 		if len(st.Arguments) == 0 {
 			return nil
 		}
-		inv := InvocationContext{UserInput: sess.UserInput.Text, Trace: sess.Trace, Plan: sess.Plan}
+		inv := InvocationContext{UserInput: taskState.UserInput.Text, Trace: taskState.Trace, Plan: taskState.Plan}
 		tmpl := BuildTemplateArgMap(inv)
 		return renderArgumentMap(maps.Clone(st.Arguments), tmpl)
 	}

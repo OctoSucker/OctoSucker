@@ -9,31 +9,31 @@ import (
 
 func (p *Planner) HandleUserInput(ctx context.Context, evt ports.Event) (*ports.Event, error) {
 	pl := evt.Payload.(ports.PayloadUserInput)
-	sess, err := p.Tasks.GetOrCreate(pl.TaskID)
+	taskState, err := p.Tasks.GetOrCreate(pl.TaskID)
 	if err != nil {
 		return nil, err
 	}
 	if pl.TelegramChatID != 0 {
-		sess.UserInput.TelegramChatID = pl.TelegramChatID
-		sess.UserInput.IngressChannel = ports.IngressTelegram
+		taskState.UserInput.TelegramChatID = pl.TelegramChatID
+		taskState.UserInput.IngressChannel = ports.IngressTelegram
 	} else {
-		sess.UserInput.IngressChannel = ports.IngressHTTP
+		taskState.UserInput.IngressChannel = ports.IngressHTTP
 	}
 	if !pl.AutoReplan {
-		sess.ReplanAllowed = true
-		sess.ReplanCount = 0
+		taskState.ReplanAllowed = true
+		taskState.ReplanCount = 0
 	}
-	sess.UserInput.Text = pl.Text
-	sess.Trace = nil
-	sess.ToolFailCount = nil
-	sess.CapabilityFailCount = nil
-	sess.SkillPriorCaps = nil
-	sess.SkillPreferredPath = nil
-	sess.ActiveSkillName = ""
-	sess.ActiveSkillVariantID = ""
-	sess.RoutePolicy = nil
-	sess.TransitionPath = nil
-	sess.GraphPathMode = p.DefaultGraphPathMode
+	taskState.UserInput.Text = pl.Text
+	taskState.Trace = nil
+	taskState.ToolFailCount = nil
+	taskState.CapabilityFailCount = nil
+	taskState.SkillPriorCaps = nil
+	taskState.SkillPreferredPath = nil
+	taskState.ActiveSkillName = ""
+	taskState.ActiveSkillVariantID = ""
+	taskState.RoutePolicy = nil
+	taskState.TransitionPath = nil
+	taskState.GraphPathMode = p.DefaultGraphPathMode
 
 	embeddingHit, err := p.Skills.MatchBestByText(ctx, pl.Text)
 	if err != nil {
@@ -60,8 +60,8 @@ func (p *Planner) HandleUserInput(ctx context.Context, evt ports.Event) (*ports.
 			routeDec = &ports.RoutePolicyDecision{Type: ports.RouteTypeHeuristicComplexRequest, Confidence: 0.05}
 		}
 	}
-	sess.RoutePolicy = routeDec
-	if err := p.Tasks.Put(sess); err != nil {
+	taskState.RoutePolicy = routeDec
+	if err := p.Tasks.Put(taskState); err != nil {
 		return nil, err
 	}
 	if routeDec.Type == ports.RouteTypeEmbeddingSkill || routeDec.Type == ports.RouteTypeKeywordSkill {

@@ -19,20 +19,20 @@ type AgentExecutor struct {
 	PlanExec *PlanExecutor
 }
 
-// NewAgentExecutor builds plan and tool executors sharing session, routing graph, capability registry, and MCP.
+// NewAgentExecutor builds plan and tool executors sharing task store, routing graph, capability registry, and MCP.
 func NewAgentExecutor(
-	sessions *task.TaskStore,
+	tasks *task.TaskStore,
 	routeGraph *routinggraph.RoutingGraph,
 	capReg *capability.CapabilityRegistry,
 	mcp *mcpclient.MCPRouter,
 ) *AgentExecutor {
 	return &AgentExecutor{
 		ToolExec: &ToolExecutor{
-			Tasks:   sessions,
+			Tasks:   tasks,
 			Invoker: mcp,
 		},
 		PlanExec: &PlanExecutor{
-			Tasks:       sessions,
+			Tasks:       tasks,
 			RouteGraph:  routeGraph,
 			CapRegistry: capReg,
 		},

@@ -7,13 +7,13 @@ import (
 )
 
 // PlanStepArguments returns a clone of arguments for the step id, or nil.
-func PlanStepArguments(sess *ports.Task, stepID string) map[string]any {
-	if sess == nil || sess.Plan == nil {
+func PlanStepArguments(taskState *ports.Task, stepID string) map[string]any {
+	if taskState == nil || taskState.Plan == nil {
 		return nil
 	}
-	for i := range sess.Plan.Steps {
-		if sess.Plan.Steps[i].ID == stepID {
-			return maps.Clone(sess.Plan.Steps[i].Arguments)
+	for i := range taskState.Plan.Steps {
+		if taskState.Plan.Steps[i].ID == stepID {
+			return maps.Clone(taskState.Plan.Steps[i].Arguments)
 		}
 	}
 	return nil

@@ -58,11 +58,11 @@ func replyFromStore(s *task.TaskStore, taskID string) (string, bool) {
 	if s == nil || taskID == "" {
 		return "", false
 	}
-	sess, ok := s.Get(taskID)
-	if !ok || sess == nil {
+	taskState, ok := s.Get(taskID)
+	if !ok || taskState == nil {
 		return "", false
 	}
-	return sess.Reply, true
+	return taskState.Reply, true
 }
 
 func (a *App) RerunTaskPlan(ctx context.Context, pathTaskID string) (string, error) {
@@ -73,30 +73,30 @@ func (a *App) RerunTaskPlan(ctx context.Context, pathTaskID string) (string, err
 	if a == nil || a.Dispatcher == nil || a.Dispatcher.Planner == nil || a.Dispatcher.Planner.Tasks == nil {
 		return "", fmt.Errorf("app: nil dispatcher or task store")
 	}
-	sessStore := a.Dispatcher.Planner.Tasks
-	sess, ok := sessStore.Get(tid)
-	if !ok || sess == nil || sess.Plan == nil {
+	taskStore := a.Dispatcher.Planner.Tasks
+	taskState, ok := taskStore.Get(tid)
+	if !ok || taskState == nil || taskState.Plan == nil {
 		return "", ErrRerunNoPlan
 	}
-	for i := range sess.Plan.Steps {
-		sess.Plan.Steps[i].Status = "pending"
+	for i := range taskState.Plan.Steps {
+		taskState.Plan.Steps[i].Status = "pending"
 	}
-	sess.Trace = nil
-	sess.ToolFailCount = nil
-	sess.CapabilityFailCount = nil
-	sess.CapChainStepID = ""
-	sess.CapChainTools = nil
-	sess.CapChainNext = 0
-	sess.StepID = ""
-	sess.PendingTool = ""
-	sess.LastCapability = ""
-	sess.LastOutcome = 0
-	sess.Reply = ""
-	sess.TrajectoryScore = 0
-	sess.TrajectorySummary = ""
-	sess.ReplanAllowed = true
-	sess.ReplanCount = 0
-	if err := sessStore.Put(sess); err != nil {
+	taskState.Trace = nil
+	taskState.ToolFailCount = nil
+	taskState.CapabilityFailCount = nil
+	taskState.CapChainStepID = ""
+	taskState.CapChainTools = nil
+	taskState.CapChainNext = 0
+	taskState.StepID = ""
+	taskState.PendingTool = ""
+	taskState.LastCapability = ""
+	taskState.LastOutcome = 0
+	taskState.Reply = ""
+	taskState.TrajectoryScore = 0
+	taskState.TrajectorySummary = ""
+	taskState.ReplanAllowed = true
+	taskState.ReplanCount = 0
+	if err := taskStore.Put(taskState); err != nil {
 		return "", err
 	}
 	event := ports.Event{Type: ports.EvPlanProgressed, Payload: ports.PayloadPlanProgressed{TaskID: tid}}
@@ -104,7 +104,7 @@ func (a *App) RerunTaskPlan(ctx context.Context, pathTaskID string) (string, err
 		log.Printf("app.RerunTaskPlan: dispatcher error task=%s err=%v", tid, err)
 		return "", err
 	}
-	reply, ok := replyFromStore(sessStore, tid)
+	reply, ok := replyFromStore(taskStore, tid)
 	if !ok {
 		return "", fmt.Errorf("task missing")
 	}

@@ -22,17 +22,17 @@ type llmPlanResponse struct {
 func (p *Planner) completeAndParseLLMPlan(ctx context.Context, taskID string, system string, user string) (*ports.Plan, error) {
 	var x llmPlanResponse
 	if err := p.PlannerLLM.CompleteJSON(ctx, system, user, &x); err != nil || len(x.Steps) == 0 {
-		log.Printf("engine.Dispatcher: invalid plan JSON session=%s err=%v", taskID, err)
+		log.Printf("engine.Dispatcher: invalid plan JSON task=%s err=%v", taskID, err)
 		return nil, fmt.Errorf("planner: llm returned invalid or empty plan json")
 	}
 	parsed := &ports.Plan{}
 	for _, st := range x.Steps {
 		if st.ID == "" || st.Capability == "" {
-			log.Printf("engine.Dispatcher: invalid plan JSON session=%s", taskID)
+			log.Printf("engine.Dispatcher: invalid plan JSON task=%s", taskID)
 			return nil, fmt.Errorf("planner: llm returned invalid or empty plan json")
 		}
 		if _, ok := p.ValidPlanCapabilities[st.Capability]; !ok {
-			log.Printf("engine.Dispatcher: invalid plan JSON session=%s", taskID)
+			log.Printf("engine.Dispatcher: invalid plan JSON task=%s", taskID)
 			return nil, fmt.Errorf("planner: llm returned invalid or empty plan json")
 		}
 		parsed.Steps = append(parsed.Steps, ports.PlanStep{

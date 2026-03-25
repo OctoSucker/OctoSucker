@@ -28,25 +28,25 @@ type Learner struct {
 
 func (l *Learner) RecordSkillLearning(ctx context.Context, evt ports.Event) error {
 	pl := evt.Payload.(ports.PayloadTurnFinalized)
-	sess, ok := l.Tasks.Get(pl.TaskID)
+	taskState, ok := l.Tasks.Get(pl.TaskID)
 	if !ok {
 		return fmt.Errorf("turnfinalized: task not found: %s", pl.TaskID)
 	}
-	success := sess.TrajectoryScore >= 0.5
-	emb, err := l.Skills.EmbedText(ctx, sess.UserInput.Text)
+	success := taskState.TrajectoryScore >= 0.5
+	emb, err := l.Skills.EmbedText(ctx, taskState.UserInput.Text)
 	if err != nil {
 		return err
 	}
-	if err := l.Skills.RecordTurn(sess.UserInput.Text, success, emb, l.SkillRouteThreshold, sess.ActiveSkillName, sess.ActiveSkillVariantID); err != nil {
+	if err := l.Skills.RecordTurn(taskState.UserInput.Text, success, emb, l.SkillRouteThreshold, taskState.ActiveSkillName, taskState.ActiveSkillVariantID); err != nil {
 		return err
 	}
-	if len(sess.TransitionPath) > 0 {
-		if err := l.RouteGraph.RecordTrajectory(sess.TransitionPath, float64(sess.TrajectoryScore), success); err != nil {
+	if len(taskState.TransitionPath) > 0 {
+		if err := l.RouteGraph.RecordTrajectory(taskState.TransitionPath, float64(taskState.TrajectoryScore), success); err != nil {
 			return fmt.Errorf("turnfinalized: record trajectory: %w", err)
 		}
 	}
-	if success && float64(sess.TrajectoryScore) >= l.ExtractScoreThreshold {
-		if err := l.maybeExtractSkillFromTask(ctx, sess); err != nil {
+	if success && float64(taskState.TrajectoryScore) >= l.ExtractScoreThreshold {
+		if err := l.maybeExtractSkillFromTask(ctx, taskState); err != nil {
 			return err
 		}
 	}
@@ -54,11 +54,11 @@ func (l *Learner) RecordSkillLearning(ctx context.Context, evt ports.Event) erro
 }
 
 // maybeExtractSkillFromTask applies min plan steps + N qualifying successes (per capability path) before MergeOrAdd.
-func (l *Learner) maybeExtractSkillFromTask(ctx context.Context, sess *ports.Task) error {
-	if sess == nil {
+func (l *Learner) maybeExtractSkillFromTask(ctx context.Context, taskState *ports.Task) error {
+	if taskState == nil {
 		return nil
 	}
-	capKey, nSteps, ok := skill.SkillLearnCapKeyFromTask(sess)
+	capKey, nSteps, ok := skill.SkillLearnCapKeyFromTask(taskState)
 	if !ok {
 		return nil
 	}
@@ -76,7 +76,7 @@ func (l *Learner) maybeExtractSkillFromTask(ctx context.Context, sess *ports.Tas
 	if c < nNeed {
 		return nil
 	}
-	entry, err := l.Skills.BuildEntryFromTask(ctx, sess)
+	entry, err := l.Skills.BuildEntryFromTask(ctx, taskState)
 	if errors.Is(err, skill.ErrNoSkillFromTask) {
 		return nil
 	}

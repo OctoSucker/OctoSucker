@@ -57,7 +57,7 @@ func (a *App) HTTPHandler() http.Handler {
 			return
 		}
 		tid, _, _ := a.effectiveTaskID(id, 0)
-		sess, ok := a.Dispatcher.Planner.Tasks.Get(tid)
+		taskState, ok := a.Dispatcher.Planner.Tasks.Get(tid)
 		if !ok {
 			if err := rtutils.WriteJSON(w, http.StatusInternalServerError, errResponse{Error: "task missing after rerun"}); err != nil {
 				log.Printf("http write error response: %v", err)
@@ -65,8 +65,8 @@ func (a *App) HTTPHandler() http.Handler {
 			return
 		}
 		if err := rtutils.WriteJSON(w, http.StatusOK, map[string]any{
-			"reply": reply, "task_id": tid, "canonical_task_id": sess.ID,
-			"trajectory_score": float64(sess.TrajectoryScore), "trajectory_summary": sess.TrajectorySummary,
+			"reply": reply, "task_id": tid, "canonical_task_id": taskState.ID,
+			"trajectory_score": float64(taskState.TrajectoryScore), "trajectory_summary": taskState.TrajectorySummary,
 		}); err != nil {
 			log.Printf("http write ok response: %v", err)
 		}
@@ -93,7 +93,7 @@ func (a *App) HTTPHandler() http.Handler {
 			return
 		}
 		tid, _, _ := a.effectiveTaskID(req.TaskID, 0)
-		sess, ok := a.Dispatcher.Planner.Tasks.Get(tid)
+		taskState, ok := a.Dispatcher.Planner.Tasks.Get(tid)
 		if !ok {
 			if err := rtutils.WriteJSON(w, http.StatusInternalServerError, errResponse{Error: "task missing"}); err != nil {
 				log.Printf("http write error response: %v", err)
@@ -103,9 +103,9 @@ func (a *App) HTTPHandler() http.Handler {
 		if err := rtutils.WriteJSON(w, http.StatusOK, runResponse{
 			Reply:             reply,
 			TaskID:            tid,
-			CanonicalTaskID:   sess.ID,
-			TrajectoryScore:   float64(sess.TrajectoryScore),
-			TrajectorySummary: sess.TrajectorySummary,
+			CanonicalTaskID:   taskState.ID,
+			TrajectoryScore:   float64(taskState.TrajectoryScore),
+			TrajectorySummary: taskState.TrajectorySummary,
 		}); err != nil {
 			log.Printf("http write ok response: %v", err)
 		}
