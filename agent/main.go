@@ -6,11 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/OctoSucker/agent/internal/config"
 	"github.com/OctoSucker/agent/internal/runtime/app"
@@ -52,7 +50,7 @@ func main() {
 	if a.Telegram != nil {
 		go func() {
 			err := a.Telegram.RunPoll(ctx, func(ctx context.Context, chatID int64, text string) (string, error) {
-				return a.RunInput(ctx, "", text, chatID)
+				return a.RunInput(ctx, chatID, text)
 			})
 			if err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("telegram poll: %v", err)
@@ -60,21 +58,6 @@ func main() {
 		}()
 	}
 
-	if a.HTTPServer != nil {
-		go func() {
-			if err := a.HTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("http: %v", err)
-				stop()
-			}
-		}()
-	}
-
 	<-ctx.Done()
-	shCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
-	if a.HTTPServer != nil {
-		if err := a.HTTPServer.Shutdown(shCtx); err != nil {
-			log.Printf("http shutdown: %v", err)
-		}
-	}
+
 }

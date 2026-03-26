@@ -1,4 +1,4 @@
-package skill
+package procedure
 
 import (
 	"context"
@@ -15,10 +15,10 @@ import (
 	rtutils "github.com/OctoSucker/agent/utils"
 )
 
-// SkillRegistry holds learned/static skills and match APIs; SQLite persistence is in skill_storage.go.
-type SkillRegistry struct {
+// ProcedureRegistry holds learned/static procedures and match APIs; SQLite persistence is in procedure_storage.go.
+type ProcedureRegistry struct {
 	mu       sync.RWMutex
-	entries  []SkillEntry
+	entries  []ProcedureEntry
 	db       *sql.DB
 	Embedder *llmclient.OpenAI
 	// VariantExplorationRate is ε for variant selection: with this probability a random usable variant
@@ -26,32 +26,32 @@ type SkillRegistry struct {
 	VariantExplorationRate float64
 }
 
-// NewSkillRegistry loads skills from db when non-nil.
-func NewSkillRegistry(db *sql.DB, embedder *llmclient.OpenAI) (*SkillRegistry, error) {
-	r := &SkillRegistry{entries: []SkillEntry{}, db: db, Embedder: embedder, VariantExplorationRate: 0.2}
+// NewProcedureRegistry loads procedures from db when non-nil.
+func NewProcedureRegistry(db *sql.DB, embedder *llmclient.OpenAI) (*ProcedureRegistry, error) {
+	r := &ProcedureRegistry{entries: []ProcedureEntry{}, db: db, Embedder: embedder, VariantExplorationRate: 0.2}
 	if db != nil {
-		if err := r.loadSkillsFromDB(); err != nil {
+		if err := r.loadProceduresFromDB(); err != nil {
 			return nil, err
 		}
 	}
 	return r, nil
 }
 
-func (r *SkillRegistry) EmbedText(ctx context.Context, text string) ([]float32, error) {
+func (r *ProcedureRegistry) EmbedText(ctx context.Context, text string) ([]float32, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, nil
 	}
 	if r.Embedder == nil {
-		return nil, fmt.Errorf("skill registry: embedder not configured")
+		return nil, fmt.Errorf("procedure registry: embedder not configured")
 	}
 	emb, err := r.Embedder.Embed(ctx, text)
 	if err != nil {
-		return nil, fmt.Errorf("skill registry: embed text: %w", err)
+		return nil, fmt.Errorf("procedure registry: embed text: %w", err)
 	}
 	return emb, nil
 }
 
-func (r *SkillRegistry) MatchByText(ctx context.Context, text string, k int) ([]SkillEntry, error) {
+func (r *ProcedureRegistry) MatchByText(ctx context.Context, text string, k int) ([]ProcedureEntry, error) {
 	emb, err := r.EmbedText(ctx, text)
 	if err != nil {
 		return nil, err
@@ -60,7 +60,7 @@ func (r *SkillRegistry) MatchByText(ctx context.Context, text string, k int) ([]
 }
 
 // MatchBestByText returns the best executable embedding hit, or nil when no valid hit exists.
-func (r *SkillRegistry) MatchBestByText(ctx context.Context, text string) (*SkillEntry, error) {
+func (r *ProcedureRegistry) MatchBestByText(ctx context.Context, text string) (*ProcedureEntry, error) {
 	hits, err := r.MatchByText(ctx, text, 1)
 	if err != nil {
 		return nil, err
@@ -72,24 +72,24 @@ func (r *SkillRegistry) MatchBestByText(ctx context.Context, text string) (*Skil
 	return &h, nil
 }
 
-func (r *SkillRegistry) BuildEntryFromTask(ctx context.Context, t *ports.Task) (SkillEntry, error) {
-	return BuildSkillEntryFromTask(ctx, t, r.Embedder)
+func (r *ProcedureRegistry) BuildEntryFromTask(ctx context.Context, t *ports.Task) (ProcedureEntry, error) {
+	return BuildProcedureEntryFromTask(ctx, t, r.Embedder)
 }
 
-func (r *SkillRegistry) Register(e SkillEntry) error {
+func (r *ProcedureRegistry) Register(e ProcedureEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	e = cloneSkillEntryForStorage(e)
+	e = cloneProcedureEntryForStorage(e)
 	e.MatchScore = 0
 	e.SelectedVariantID = ""
 	r.entries = append(r.entries, e)
-	return r.persistSkillsDBLocked()
+	return r.persistProceduresDBLocked()
 }
 
-func (r *SkillRegistry) MergeOrAdd(e SkillEntry) error {
+func (r *ProcedureRegistry) MergeOrAdd(e ProcedureEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	e = cloneSkillEntryForStorage(e)
+	e = cloneProcedureEntryForStorage(e)
 	e.MatchScore = 0
 	e.SelectedVariantID = ""
 	for i := range r.entries {
@@ -100,33 +100,33 @@ func (r *SkillRegistry) MergeOrAdd(e SkillEntry) error {
 				r.entries[i].TriggerEmbedding = append([]float32(nil), e.TriggerEmbedding...)
 			}
 			for _, nv := range e.Variants {
-				mergeSkillVariant(&r.entries[i], nv)
+				mergeProcedureVariant(&r.entries[i], nv)
 			}
-			return r.persistSkillsDBLocked()
+			return r.persistProceduresDBLocked()
 		}
 	}
 	r.entries = append(r.entries, e)
-	return r.persistSkillsDBLocked()
+	return r.persistProceduresDBLocked()
 }
 
-func mergeSkillVariant(skill *SkillEntry, nv SkillPlanVariant) {
+func mergeProcedureVariant(procedure *ProcedureEntry, nv ProcedurePlanVariant) {
 	if nv.ID == "" || nv.Plan == nil {
 		return
 	}
-	for j := range skill.Variants {
-		if skill.Variants[j].ID != nv.ID {
+	for j := range procedure.Variants {
+		if procedure.Variants[j].ID != nv.ID {
 			continue
 		}
-		skill.Variants[j].Attempts += nv.Attempts
-		skill.Variants[j].Successes += nv.Successes
-		skill.Variants[j].Plan = CloneSkillPlan(nv.Plan)
-		skill.Variants[j].Params = cloneParamSpecs(nv.Params)
-		skill.Variants[j].LastUsedUnix = maxInt64(skill.Variants[j].LastUsedUnix, nv.LastUsedUnix)
+		procedure.Variants[j].Attempts += nv.Attempts
+		procedure.Variants[j].Successes += nv.Successes
+		procedure.Variants[j].Plan = CloneProcedurePlan(nv.Plan)
+		procedure.Variants[j].Params = cloneParamSpecs(nv.Params)
+		procedure.Variants[j].LastUsedUnix = maxInt64(procedure.Variants[j].LastUsedUnix, nv.LastUsedUnix)
 		return
 	}
-	skill.Variants = append(skill.Variants, SkillPlanVariant{
+	procedure.Variants = append(procedure.Variants, ProcedurePlanVariant{
 		ID:           nv.ID,
-		Plan:         CloneSkillPlan(nv.Plan),
+		Plan:         CloneProcedurePlan(nv.Plan),
 		Params:       cloneParamSpecs(nv.Params),
 		Attempts:     nv.Attempts,
 		Successes:    nv.Successes,
@@ -134,14 +134,14 @@ func mergeSkillVariant(skill *SkillEntry, nv SkillPlanVariant) {
 	})
 }
 
-// MarkUsed updates skill-level LastUsedAt; if variantID is non-empty, also updates that variant's LastUsedUnix.
-func (r *SkillRegistry) MarkUsed(skillName, variantID string) error {
+// MarkUsed updates procedure-level LastUsedAt; if variantID is non-empty, also updates that variant's LastUsedUnix.
+func (r *ProcedureRegistry) MarkUsed(procedureName, variantID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
 	unix := now.Unix()
 	for i := range r.entries {
-		if r.entries[i].Name != skillName {
+		if r.entries[i].Name != procedureName {
 			continue
 		}
 		r.entries[i].LastUsedAt = now
@@ -155,10 +155,10 @@ func (r *SkillRegistry) MarkUsed(skillName, variantID string) error {
 		}
 		break
 	}
-	return r.persistSkillsDBLocked()
+	return r.persistProceduresDBLocked()
 }
 
-func (r *SkillRegistry) Match(userText string) []string {
+func (r *ProcedureRegistry) Match(userText string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	t := strings.ToLower(userText)
@@ -183,7 +183,7 @@ func (r *SkillRegistry) Match(userText string) []string {
 	return out
 }
 
-func (r *SkillRegistry) KeywordPlanEntry(userText string) (SkillEntry, bool) {
+func (r *ProcedureRegistry) KeywordPlanEntry(userText string) (ProcedureEntry, bool) {
 	t := strings.ToLower(userText)
 	now := time.Now()
 	r.mu.RLock()
@@ -200,11 +200,11 @@ func (r *SkillRegistry) KeywordPlanEntry(userText string) (SkillEntry, bool) {
 			}
 		}
 	}
-	return SkillEntry{}, false
+	return ProcedureEntry{}, false
 }
 
 // KeywordPlanHit returns the first keyword-matched entry that has an executable selected plan, or nil.
-func (r *SkillRegistry) KeywordPlanHit(userText string) *SkillEntry {
+func (r *ProcedureRegistry) KeywordPlanHit(userText string) *ProcedureEntry {
 	e, ok := r.KeywordPlanEntry(userText)
 	if !ok || e.SelectedPlan() == nil {
 		return nil
@@ -212,7 +212,7 @@ func (r *SkillRegistry) KeywordPlanHit(userText string) *SkillEntry {
 	return &e
 }
 
-func (r *SkillRegistry) MatchByEmbedding(embedding []float32, k int) []SkillEntry {
+func (r *ProcedureRegistry) MatchByEmbedding(embedding []float32, k int) []ProcedureEntry {
 	if len(embedding) == 0 || k <= 0 {
 		return nil
 	}
@@ -220,7 +220,7 @@ func (r *SkillRegistry) MatchByEmbedding(embedding []float32, k int) []SkillEntr
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	type scored struct {
-		entry SkillEntry
+		entry ProcedureEntry
 		score float64
 	}
 	var list []scored
@@ -239,7 +239,7 @@ func (r *SkillRegistry) MatchByEmbedding(embedding []float32, k int) []SkillEntr
 	if k > len(list) {
 		k = len(list)
 	}
-	out := make([]SkillEntry, 0, k)
+	out := make([]ProcedureEntry, 0, k)
 	for i := 0; i < k; i++ {
 		e := list[i].entry
 		bi := bestVariantIndex(e.Variants, now, r.VariantExplorationRate)
@@ -248,19 +248,19 @@ func (r *SkillRegistry) MatchByEmbedding(embedding []float32, k int) []SkillEntr
 	return out
 }
 
-// RecordTurn updates skill stats from keywords / embedding, or from an attributed skill+variant when provided.
-func (r *SkillRegistry) RecordTurn(userText string, success bool, queryEmbedding []float32, minEmbeddingSim float64, activeSkillName, activeVariantID string) (err error) {
+// RecordTurn updates procedure stats from keywords / embedding, or from an attributed procedure+variant when provided.
+func (r *ProcedureRegistry) RecordTurn(userText string, success bool, queryEmbedding []float32, minEmbeddingSim float64, activeProcedureName, activeVariantID string) (err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	defer func() {
-		if perr := r.persistSkillsDBLocked(); perr != nil {
+		if perr := r.persistProceduresDBLocked(); perr != nil {
 			err = errors.Join(err, perr)
 		}
 	}()
 
-	if activeSkillName != "" && activeVariantID != "" {
+	if activeProcedureName != "" && activeVariantID != "" {
 		for i := range r.entries {
-			if r.entries[i].Name != activeSkillName {
+			if r.entries[i].Name != activeProcedureName {
 				continue
 			}
 			for j := range r.entries[i].Variants {

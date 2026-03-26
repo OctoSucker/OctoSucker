@@ -12,19 +12,13 @@ import (
 	"github.com/OctoSucker/agent/internal/runtime/engine/planning"
 	"github.com/OctoSucker/agent/internal/runtime/store/capability"
 	"github.com/OctoSucker/agent/internal/runtime/store/nodefailure"
+	procedure "github.com/OctoSucker/agent/internal/runtime/store/procedure"
 	"github.com/OctoSucker/agent/internal/runtime/store/recall"
 	routinggraph "github.com/OctoSucker/agent/internal/runtime/store/routing_graph"
-	skill "github.com/OctoSucker/agent/internal/runtime/store/skill"
 	"github.com/OctoSucker/agent/internal/runtime/store/task"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/ports"
-)
-
-const (
-	skillRouteThreshold = 0.9
-	graphRouteThreshold = 0.7
-	keywordConfidence   = 0.92
 )
 
 type Dispatcher struct {
@@ -39,16 +33,12 @@ func NewDispatcher(
 	mcpRouter *mcpclient.MCPRouter,
 	openai config.OpenAI,
 	sqlDB *sql.DB,
-	graphPathMode string,
-	skillLearnMinPlanSteps int,
-	skillLearnMinSuccessCount int,
 ) (*Dispatcher, error) {
 
 	capReg, err := capability.NewCapabilityRegistry(ctx, mcpRouter)
 	if err != nil {
 		return nil, err
 	}
-	gpm := ports.ParseGraphPathMode(graphPathMode)
 	taskStore, err := task.NewTaskStore(sqlDB)
 	if err != nil {
 		return nil, fmt.Errorf("dispatcher: task store: %w", err)
@@ -65,9 +55,9 @@ func NewDispatcher(
 	plannerLLM := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
 	embedder := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
 	trajectoryLLM := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
-	skills, err := skill.NewSkillRegistry(sqlDB, embedder)
+	procedures, err := procedure.NewProcedureRegistry(sqlDB, embedder)
 	if err != nil {
-		return nil, fmt.Errorf("dispatcher: skill registry: %w", err)
+		return nil, fmt.Errorf("dispatcher: procedure registry: %w", err)
 	}
 	recallCorpus, err := recall.NewRecallCorpus(embedder, sqlDB)
 	if err != nil {
@@ -77,31 +67,23 @@ func NewDispatcher(
 	d := &Dispatcher{
 		MaxSteps: 200,
 		Planner: planning.NewPlanner(
-			skillRouteThreshold,
-			graphRouteThreshold,
-			keywordConfidence,
 			taskStore,
 			routeGraph,
-			skills,
+			procedures,
 			nodeFailures,
 			recallCorpus,
 			plannerLLM,
-			capReg.AllCapabilities(),
-			mcpclient.PlannerToolAppendix(mcpRouter.ListToolSpecs()),
-			capReg.ToolInputSchemasByName(),
-			gpm,
+			capReg,
+			mcpRouter.PlannerToolAppendix(),
 		),
-		Judge: judgepkg.New(
+		Judge: judgepkg.NewJudge(
 			taskStore,
 			routeGraph,
-			skills,
+			procedures,
 			capReg,
 			trajectoryLLM,
 			recallCorpus,
 			nodeFailures,
-			sqlDB,
-			skillLearnMinPlanSteps,
-			skillLearnMinSuccessCount,
 		),
 		Executor: execution.NewAgentExecutor(
 			taskStore,
@@ -124,8 +106,8 @@ func (d *Dispatcher) Run(ctx context.Context, event ports.Event) error {
 		switch evt.Type {
 		case ports.EvUserInput:
 			out, err = d.Planner.HandleUserInput(ctx, evt)
-		case ports.EvSkillPlanRequested:
-			out, err = d.Planner.HandleSkillPlanRequested(ctx, evt)
+		case ports.EvProcedurePlanRequested:
+			out, err = d.Planner.HandleProcedurePlanRequested(ctx, evt)
 		case ports.EvLLMPlanRequested:
 			out, err = d.Planner.HandleLLMPlanRequested(ctx, evt)
 		case ports.EvPlanProgressed:
@@ -139,8 +121,8 @@ func (d *Dispatcher) Run(ctx context.Context, event ports.Event) error {
 		case ports.EvTrajectoryCheck:
 			out, err = d.Judge.TrajectoryCritic.HandleTrajectoryCheck(ctx, evt)
 		case ports.EvTurnFinalized:
-			if err := d.Judge.Learner.RecordSkillLearning(ctx, evt); err != nil {
-				log.Printf("engine.Dispatcher.Run: record skill learning: %v", err)
+			if err := d.Judge.Learner.RecordProcedureLearning(ctx, evt); err != nil {
+				log.Printf("engine.Dispatcher.Run: record procedure learning: %v", err)
 			}
 			if err := d.Judge.RecallArchiver.ArchiveRecall(ctx, evt); err != nil {
 				log.Printf("engine.Dispatcher.Run: archive recall: %v", err)

@@ -7,18 +7,17 @@ type Plan struct {
 }
 
 type PlanStep struct {
-	ID         string         `json:"id"`
-	Goal       string         `json:"goal"`
-	Status     string         `json:"status"`
-	DependsOn  []string       `json:"depends_on"`
-	Capability string         `json:"capability"`
-	Arguments  map[string]any `json:"arguments,omitempty"`
+	ID         string   `json:"id"`
+	Goal       string   `json:"goal"`
+	Status     string   `json:"status"`
+	DependsOn  []string `json:"depends_on"`
+	Capability string   `json:"capability"`
+	// Tool is the MCP tool name when the capability exposes multiple tools; empty means the first tool (legacy / single-tool caps).
+	Tool      string         `json:"tool,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
 }
 
 func (p *Plan) Runnable() []PlanStep {
-	if p == nil {
-		return nil
-	}
 	done := make(map[string]bool)
 	for i := range p.Steps {
 		if p.Steps[i].Status == "done" {
@@ -49,9 +48,6 @@ func (p *Plan) Runnable() []PlanStep {
 }
 
 func (p *Plan) MarkRunning(stepID string) {
-	if p == nil {
-		return
-	}
 	for i := range p.Steps {
 		if p.Steps[i].ID == stepID {
 			p.Steps[i].Status = "running"
@@ -61,9 +57,6 @@ func (p *Plan) MarkRunning(stepID string) {
 }
 
 func (p *Plan) MarkDone(stepID string) {
-	if p == nil {
-		return
-	}
 	for i := range p.Steps {
 		if p.Steps[i].ID == stepID {
 			p.Steps[i].Status = "done"
@@ -73,9 +66,6 @@ func (p *Plan) MarkDone(stepID string) {
 }
 
 func (p *Plan) MarkPending(stepID string) {
-	if p == nil {
-		return
-	}
 	for i := range p.Steps {
 		if p.Steps[i].ID == stepID {
 			p.Steps[i].Status = "pending"

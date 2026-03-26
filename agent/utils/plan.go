@@ -16,9 +16,9 @@ func FindPlanStep(p *ports.Plan, stepID string) *ports.PlanStep {
 }
 
 // RouteSearchGroups orders candidate capability lists by routing type.
-func RouteSearchGroups(routeType ports.RouteType, frontier, skillPath, skillPrior []string) [][]string {
+func RouteSearchGroups(routeType ports.RouteType, frontier, procedurePath, procedurePrior []string) [][]string {
 	if routeType == ports.RouteTypeGraphConfidence {
-		return [][]string{frontier, skillPath, skillPrior}
+		return [][]string{frontier, procedurePath, procedurePrior}
 	}
-	return [][]string{skillPath, skillPrior, frontier}
+	return [][]string{procedurePath, procedurePrior, frontier}
 }

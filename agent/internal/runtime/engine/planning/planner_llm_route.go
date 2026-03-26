@@ -32,15 +32,16 @@ func (p *Planner) HandleLLMPlanRequested(ctx context.Context, evt ports.Event) (
 	if taskState.UserInput.TelegramChatID != 0 {
 		user += fmt.Sprintf("\n\n[Channel: Telegram; current chat_id is %d. Include it as \"chat_id\" in step arguments when a tool requires chat_id.]", taskState.UserInput.TelegramChatID)
 	}
-	taskState.SkillPriorCaps = p.Skills.Match(taskState.UserInput.Text)
+	taskState.ProcedurePriorCaps = p.Procedures.Match(taskState.UserInput.Text)
 
-	if len(p.ValidPlanCapabilities) == 0 {
+	if p.CapRegistry == nil || len(p.CapRegistry.AllCapabilities()) == 0 {
 		log.Printf("engine.Dispatcher: invalid plan JSON task=%s", pl.TaskID)
 		return nil, fmt.Errorf("planner: llm returned invalid or empty plan json")
 	}
 	system := p.buildPlannerSystemPrompt()
 	parsed, err := p.completeAndParseLLMPlan(ctx, pl.TaskID, system, user)
 	if err != nil {
+		log.Printf("engine.Dispatcher: completeAndParseLLMPlan failed task=%s err=%v", pl.TaskID, err)
 		return nil, err
 	}
 	return p.finalizePlan(pl.TaskID, taskState, parsed)

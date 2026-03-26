@@ -5,79 +5,71 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/OctoSucker/agent/internal/runtime/store/capability"
 	"github.com/OctoSucker/agent/internal/runtime/store/nodefailure"
+	procedure "github.com/OctoSucker/agent/internal/runtime/store/procedure"
 	"github.com/OctoSucker/agent/internal/runtime/store/recall"
 	routinggraph "github.com/OctoSucker/agent/internal/runtime/store/routing_graph"
-	skill "github.com/OctoSucker/agent/internal/runtime/store/skill"
 	"github.com/OctoSucker/agent/internal/runtime/store/task"
 	"github.com/OctoSucker/agent/pkg/llmclient"
-	"github.com/OctoSucker/agent/pkg/mcpclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
 type Planner struct {
-	Tasks                 *task.TaskStore
-	RouteGraph            *routinggraph.RoutingGraph
-	Skills                *skill.SkillRegistry
-	SkillRouteThreshold   float64
-	GraphRouteThreshold   float64
-	KeywordConfidence     float64
-	NodeFailures          *nodefailure.NodeFailureStats
-	RecallCorpus          *recall.RecallCorpus
-	PlannerLLM            *llmclient.OpenAI
-	PlanSystemPrompt      string
-	ValidPlanCapabilities map[string]mcpclient.Capability
-	ToolAppendix          string
-	ToolInputSchemas      map[string]any
+	Tasks            *task.TaskStore
+	RouteGraph       *routinggraph.RoutingGraph
+	Procedures       *procedure.ProcedureRegistry
+	NodeFailures     *nodefailure.NodeFailureStats
+	RecallCorpus     *recall.RecallCorpus
+	PlannerLLM       *llmclient.OpenAI
+	PlanSystemPrompt string
+	CapRegistry      *capability.CapabilityRegistry
+	ToolAppendix     string
 	// DefaultGraphPathMode: greedy (Frontier) vs global (Dijkstra on feasible candidates); applied each turn on the task.
 	DefaultGraphPathMode ports.GraphPathMode
 }
 
 // NewPlanner centralizes planner initialization, including system prompt generation.
 func NewPlanner(
-	skillRouteThreshold float64,
-	graphRouteThreshold float64,
-	keywordConfidence float64,
 	tasks *task.TaskStore,
 	routeGraph *routinggraph.RoutingGraph,
-	skills *skill.SkillRegistry,
+	procedures *procedure.ProcedureRegistry,
 	nodeFailures *nodefailure.NodeFailureStats,
 	recallCorpus *recall.RecallCorpus,
 	plannerLLM *llmclient.OpenAI,
-	validPlanCapabilities map[string]mcpclient.Capability,
+	capReg *capability.CapabilityRegistry,
 	toolAppendix string,
-	toolInputSchemas map[string]any,
-	defaultGraphPathMode ports.GraphPathMode,
 ) *Planner {
+
 	planSys := ""
-	if len(validPlanCapabilities) > 0 {
-		ids := make([]string, 0, len(validPlanCapabilities))
-		for id := range validPlanCapabilities {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		exampleCap := ids[0]
-		planSys = fmt.Sprintf(`Reply with only one JSON object:
-{"steps":[{"id":"1","goal":"string","capability":%q,"depends_on":[],"arguments":{}}]}
+	if capReg != nil {
+		valid := capReg.AllCapabilities()
+		if len(valid) > 0 {
+			ids := make([]string, 0, len(valid))
+			for id := range valid {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			exampleCap := ids[0]
+			planSys = fmt.Sprintf(`Reply with only one JSON object:
+{"steps":[{"id":"1","goal":"string","capability":%q,"tool":"exact_mcp_tool_name_if_needed","depends_on":[],"arguments":{}}]}
 Each step's "capability" must be one of: %s.
-Include per-step "arguments" matching the MCP tool schema (see appendix in system message). Use {} or omit when no parameters.
-Pick the capability that fits the user's request (e.g. questions about the bot or its name: get_telegram_bot_info; sending Telegram text: send_telegram_message).
+When the appendix lists more than one tool under that capability, set "tool" to the exact MCP tool name (e.g. send_telegram_message). Omit "tool" only when that capability has exactly one tool.
+Include per-step "arguments" matching that tool's input schema (see appendix). Use {} or omit when no parameters.
+Pick the capability that fits the user's request (e.g. listing files: exec server tools; Telegram replies: telegram tools with the right "tool" and schema).
 Use depends_on as array of prior step ids.`, exampleCap, strings.Join(ids, "|"))
+		}
 	}
 	return &Planner{
-		Tasks:                 tasks,
-		RouteGraph:            routeGraph,
-		Skills:                skills,
-		SkillRouteThreshold:   skillRouteThreshold,
-		GraphRouteThreshold:   graphRouteThreshold,
-		KeywordConfidence:     keywordConfidence,
-		NodeFailures:          nodeFailures,
-		RecallCorpus:          recallCorpus,
-		PlannerLLM:            plannerLLM,
-		PlanSystemPrompt:      planSys,
-		ValidPlanCapabilities: validPlanCapabilities,
-		ToolAppendix:          toolAppendix,
-		ToolInputSchemas:      toolInputSchemas,
-		DefaultGraphPathMode:  defaultGraphPathMode,
+		Tasks:                tasks,
+		RouteGraph:           routeGraph,
+		Procedures:           procedures,
+		NodeFailures:         nodeFailures,
+		RecallCorpus:         recallCorpus,
+		PlannerLLM:           plannerLLM,
+		PlanSystemPrompt:     planSys,
+		CapRegistry:          capReg,
+		ToolAppendix:         toolAppendix,
+		DefaultGraphPathMode: ports.GraphPathGreedy,
 	}
 }

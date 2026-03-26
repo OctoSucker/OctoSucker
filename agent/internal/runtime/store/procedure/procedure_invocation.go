@@ -1,4 +1,4 @@
-package skill
+package procedure
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
-// InvocationContext carries everything needed to resolve skill parameters and {{...}} templates.
+// InvocationContext carries everything needed to resolve procedure parameters and {{...}} templates.
 type InvocationContext struct {
 	UserInput string
 	Trace     []ports.StepTrace
@@ -89,7 +89,7 @@ func BuildTemplateArgMap(inv InvocationContext) map[string]any {
 }
 
 // BuildInvocationArgs merges template keys, param defaults, FromStepID, user-text heuristics, and required checks.
-func BuildInvocationArgs(inv InvocationContext, params []SkillParamSpec) (map[string]any, error) {
+func BuildInvocationArgs(inv InvocationContext, params []ProcedureParamSpec) (map[string]any, error) {
 	args := map[string]any{}
 	for k, v := range BuildTemplateArgMap(inv) {
 		args[k] = v
@@ -132,22 +132,22 @@ func BuildInvocationArgs(inv InvocationContext, params []SkillParamSpec) (map[st
 			continue
 		}
 		if args[p.Name] == nil {
-			return nil, fmt.Errorf("missing required skill arg %q", p.Name)
+			return nil, fmt.Errorf("missing required procedure arg %q", p.Name)
 		}
 	}
 	return args, nil
 }
 
-// InvokeSkillVariant builds args and instantiates the variant plan (single entry for skill routing).
-func InvokeSkillVariant(v *SkillPlanVariant, inv InvocationContext) (*ports.Plan, error) {
+// InvokeProcedureVariant builds args and instantiates the variant plan (single entry for procedure routing).
+func InvokeProcedureVariant(v *ProcedurePlanVariant, inv InvocationContext) (*ports.Plan, error) {
 	if v == nil || v.Plan == nil {
-		return nil, fmt.Errorf("skill.InvokeSkillVariant: nil variant or plan")
+		return nil, fmt.Errorf("procedure.InvokeProcedureVariant: nil variant or plan")
 	}
 	args, err := BuildInvocationArgs(inv, v.Params)
 	if err != nil {
 		return nil, err
 	}
-	return InstantiateSkillPlan(v.Plan, args), nil
+	return InstantiateProcedurePlan(v.Plan, args), nil
 }
 
 // RenderPlanStepArguments clones a plan step's arguments and substitutes {{keys}} using current task trace and user input.

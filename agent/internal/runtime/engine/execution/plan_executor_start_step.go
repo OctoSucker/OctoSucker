@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"maps"
 
-	skill "github.com/OctoSucker/agent/internal/runtime/store/skill"
+	procedure "github.com/OctoSucker/agent/internal/runtime/store/procedure"
 	"github.com/OctoSucker/agent/pkg/ports"
 	rtutils "github.com/OctoSucker/agent/utils"
 )
@@ -26,25 +26,21 @@ func (x *PlanExecutor) startPlanStep(ctx context.Context, task *ports.Task, step
 	if capID != step.Capability {
 		step.Capability = capID
 	}
-	tools := x.CapRegistry.Tools(step.Capability)
-	if len(tools) == 0 {
-		return nil, fmt.Errorf("plan_executor: capability %q has no tools", step.Capability)
+	if !x.CapRegistry.CheckStepTool(step.Capability, step.Tool) {
+		return nil, fmt.Errorf("plan_executor: invalid tool %q for capability %q", step.Tool, step.Capability)
 	}
+	task.PendingTool = step.Tool
 	task.Plan.MarkRunning(step.ID)
-	if len(tools) == 1 {
-		task.CapChainStepID, task.CapChainTools, task.CapChainNext = "", nil, 0
-	} else {
-		task.CapChainStepID, task.CapChainTools, task.CapChainNext = step.ID, tools, 0
-	}
-	task.StepID, task.PendingTool = step.ID, tools[0]
+	task.StepID = step.ID
+
 	if err := x.Tasks.Put(task); err != nil {
 		return nil, err
 	}
-	argMap := skill.RenderPlanStepArguments(task, step.ID)
+	argMap := procedure.RenderPlanStepArguments(task, step.ID)
 	if argMap == nil {
 		argMap = maps.Clone(step.Arguments)
 	}
 	return ports.EventPtr(ports.Event{Type: ports.EvToolCall, Payload: ports.PayloadToolCall{
-		TaskID: task.ID, StepID: step.ID, Capability: step.Capability, Tool: tools[0], Arguments: argMap,
+		TaskID: task.ID, StepID: step.ID, Capability: step.Capability, Tool: task.PendingTool, Arguments: argMap,
 	}}), nil
 }

@@ -93,16 +93,16 @@ func (m *MCPRouter) ListCapabilities(ctx context.Context) (map[string][]mcp.Tool
 	return out, nil
 }
 
-func (m *MCPRouter) Invoke(ctx context.Context, inv CapabilityInvocation) (ports.ToolResult, error) {
+func (m *MCPRouter) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
 	if m == nil {
 		return ports.ToolResult{}, fmt.Errorf("mcpclient.MCPRouter: nil")
 	}
-	runner, ok := m.runners[inv.ServerName]
+	runner, ok := m.runners[inv.CapabilityName]
 	if !ok {
-		return ports.ToolResult{}, fmt.Errorf("mcpclient.MCPRouter: server %q not found", inv.ServerName)
+		return ports.ToolResult{}, fmt.Errorf("mcpclient.MCPRouter: server %q not found", inv.CapabilityName)
 	}
 	if !runner.HasTool(inv.Tool) {
-		return ports.ToolResult{}, fmt.Errorf("mcpclient.MCPRouter: tool %q not found on server %q", inv.Tool, inv.ServerName)
+		return ports.ToolResult{}, fmt.Errorf("mcpclient.MCPRouter: tool %q not found on server %q", inv.Tool, inv.CapabilityName)
 	}
 	return runner.Invoke(ctx, inv)
 }

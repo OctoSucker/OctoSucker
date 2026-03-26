@@ -12,7 +12,7 @@ type PayloadPlanProgressed struct {
 	TaskID string `json:"task_id"`
 }
 
-type PayloadSkillPlanRequested struct {
+type PayloadProcedurePlanRequested struct {
 	TaskID string `json:"task_id"`
 }
 

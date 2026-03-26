@@ -1,4 +1,4 @@
-package skill
+package procedure
 
 import (
 	"context"
@@ -14,19 +14,19 @@ import (
 	rtutils "github.com/OctoSucker/agent/utils"
 )
 
-// ErrNoSkillFromTask means the task has no extractable capability path / fingerprint for skill learning.
-var ErrNoSkillFromTask = errors.New("skill: no extractable skill from task")
+// ErrNoProcedureFromTask means the task has no extractable capability path / fingerprint for procedure learning.
+var ErrNoProcedureFromTask = errors.New("procedure: no extractable procedure from task")
 
-// SkillPlanVariant is the "Variant → Plan" layer:
-// same macro capability path (see SkillEntry) may have multiple concrete plans + runtime param schema.
-// Layer chain: Intent (task) → SkillEntry (trigger + path) → SkillPlanVariant → ports.Plan → PlanStep → tool.
-type SkillPlanVariant struct {
+// ProcedurePlanVariant is the "Variant → Plan" layer:
+// same macro capability path (see ProcedureEntry) may have multiple concrete plans + runtime param schema.
+// Layer chain: Intent (task) → ProcedureEntry (trigger + path) → ProcedurePlanVariant → ports.Plan → PlanStep → tool.
+type ProcedurePlanVariant struct {
 	// --- Variant identity ---
 	ID string
 
 	// --- Executable plan + parameterization (template → instantiated in planner) ---
 	Plan   *ports.Plan
-	Params []SkillParamSpec
+	Params []ProcedureParamSpec
 
 	// --- Variant-level learning / scheduling ---
 	Attempts     int
@@ -34,25 +34,25 @@ type SkillPlanVariant struct {
 	LastUsedUnix int64 // unix seconds when this variant was last chosen (0 = never); drives recency decay in selection
 }
 
-// SkillParamSpec describes one runtime argument accepted by a skill variant.
-type SkillParamSpec struct {
+// ProcedureParamSpec describes one runtime argument accepted by a procedure variant.
+type ProcedureParamSpec struct {
 	Name        string `json:"name"`
 	Type        string `json:"type,omitempty"`
 	Required    bool   `json:"required,omitempty"`
 	Description string `json:"description,omitempty"`
 	Default     any    `json:"default,omitempty"`
-	// FromStepID: if set, fill this param from aggregated trace summary for that plan step id (after BuildInvocationArgs / InvokeSkillVariant).
+	// FromStepID: if set, fill this param from aggregated trace summary for that plan step id (after BuildInvocationArgs / InvokeProcedureVariant).
 	FromStepID string `json:"from_step_id,omitempty"`
 }
 
-// SkillEntry is the persisted "Skill" layer: trigger + macro capability path + variants.
-// It does not hold user intent text; matching happens in SkillRegistry / Planner using keywords and embeddings.
-// Layer chain: User intent → SkillRegistry.Match* / MatchByEmbedding → SkillEntry → SkillPlanVariant → Plan → Steps.
-type SkillEntry struct {
-	// --- Skill identity (storage key, learned_*, etc.) ---
+// ProcedureEntry is the persisted "Procedure" layer: trigger + macro capability path + variants.
+// It does not hold user intent text; matching happens in ProcedureRegistry / Planner using keywords and embeddings.
+// Layer chain: User intent → ProcedureRegistry.Match* / MatchByEmbedding → ProcedureEntry → ProcedurePlanVariant → Plan → Steps.
+type ProcedureEntry struct {
+	// --- Procedure identity (storage key, learned_*, etc.) ---
 	Name string
 
-	// --- Trigger layer (how this skill is recalled from intent) ---
+	// --- Trigger layer (how this procedure is recalled from intent) ---
 	Keywords         []string
 	TriggerEmbedding []float32 // cosine-matched to query embedding when non-empty
 
@@ -61,9 +61,9 @@ type SkillEntry struct {
 	Path         []string // preferred routing hint; falls back to Capabilities when empty
 
 	// --- Variant layer: competing implementations + stats ---
-	Variants []SkillPlanVariant
+	Variants []ProcedurePlanVariant
 
-	// --- Skill-level aggregates (keyword hits, embedding reinforcement, attributed turns) ---
+	// --- Procedure-level aggregates (keyword hits, embedding reinforcement, attributed turns) ---
 	Attempts   int
 	Successes  int
 	LastUsedAt time.Time
@@ -73,28 +73,28 @@ type SkillEntry struct {
 	SelectedVariantID string  `json:"-"` // if set, SelectedVariant/SelectedPlan use this variant; else bestVariantIndex
 }
 
-func (e SkillEntry) SuccessRate() float64 {
+func (e ProcedureEntry) SuccessRate() float64 {
 	if e.Attempts <= 0 {
 		return 1
 	}
 	return float64(e.Successes) / float64(e.Attempts)
 }
 
-func (e SkillEntry) tooPoorForMatch() bool {
+func (e ProcedureEntry) tooPoorForMatch() bool {
 	return e.Attempts > 5 && e.SuccessRate() < 0.3
 }
 
 // SelectedPlan returns a deep copy of the plan for the selected or best-scoring variant.
-func (e SkillEntry) SelectedPlan() *ports.Plan {
+func (e ProcedureEntry) SelectedPlan() *ports.Plan {
 	v := e.SelectedVariant()
 	if v == nil {
 		return nil
 	}
-	return CloneSkillPlan(v.Plan)
+	return CloneProcedurePlan(v.Plan)
 }
 
 // SelectedVariant returns a deep copy of selected (or best) variant.
-func (e SkillEntry) SelectedVariant() *SkillPlanVariant {
+func (e ProcedureEntry) SelectedVariant() *ProcedurePlanVariant {
 	if len(e.Variants) == 0 {
 		return nil
 	}
@@ -114,13 +114,13 @@ func (e SkillEntry) SelectedVariant() *SkillPlanVariant {
 	return &v
 }
 
-func (e SkillEntry) PreferredPath() []string {
+func (e ProcedureEntry) PreferredPath() []string {
 	return pathOrCaps(e)
 }
 
-// SkillLearnCapKeyFromTask returns a stable key for the capability sequence (same as learned_* name suffix)
+// ProcedureLearnCapKeyFromTask returns a stable key for the capability sequence (same as learned_* name suffix)
 // and the number of plan steps. ok is false if there is no usable capability path.
-func SkillLearnCapKeyFromTask(taskState *ports.Task) (capKey string, planStepCount int, ok bool) {
+func ProcedureLearnCapKeyFromTask(taskState *ports.Task) (capKey string, planStepCount int, ok bool) {
 	if taskState == nil || taskState.Plan == nil || len(taskState.Plan.Steps) == 0 {
 		return "", 0, false
 	}
@@ -137,9 +137,9 @@ func SkillLearnCapKeyFromTask(taskState *ports.Task) (capKey string, planStepCou
 	return rtutils.HashPipeJoinedCapabilities(caps), planStepCount, true
 }
 
-func BuildSkillEntryFromTask(ctx context.Context, taskState *ports.Task, embedder *llmclient.OpenAI) (SkillEntry, error) {
+func BuildProcedureEntryFromTask(ctx context.Context, taskState *ports.Task, embedder *llmclient.OpenAI) (ProcedureEntry, error) {
 	if taskState == nil || taskState.Plan == nil || len(taskState.Plan.Steps) == 0 {
-		return SkillEntry{}, ErrNoSkillFromTask
+		return ProcedureEntry{}, ErrNoProcedureFromTask
 	}
 	caps := make([]string, 0, len(taskState.Plan.Steps))
 	for _, st := range taskState.Plan.Steps {
@@ -148,35 +148,35 @@ func BuildSkillEntryFromTask(ctx context.Context, taskState *ports.Task, embedde
 		}
 	}
 	if len(caps) == 0 {
-		return SkillEntry{}, ErrNoSkillFromTask
+		return ProcedureEntry{}, ErrNoProcedureFromTask
 	}
 	fp := rtutils.PlanSemanticFingerprint(taskState.Plan)
 	if fp == "" {
-		return SkillEntry{}, ErrNoSkillFromTask
+		return ProcedureEntry{}, ErrNoProcedureFromTask
 	}
 	var emb []float32
 	if embedder != nil && taskState.UserInput.Text != "" {
 		var err error
 		emb, err = embedder.Embed(ctx, taskState.UserInput.Text)
 		if err != nil {
-			return SkillEntry{}, fmt.Errorf("skill: embed user input: %w", err)
+			return ProcedureEntry{}, fmt.Errorf("procedure: embed user input: %w", err)
 		}
 	}
 	now := time.Now().Unix()
-	return SkillEntry{
+	return ProcedureEntry{
 		Name:             "learned_" + rtutils.HashPipeJoinedCapabilities(caps),
 		Capabilities:     caps,
 		Path:             append([]string(nil), caps...),
 		TriggerEmbedding: emb,
-		Variants: []SkillPlanVariant{{
-			ID: fp, Plan: CloneSkillPlan(taskState.Plan), Attempts: 1, Successes: 1, LastUsedUnix: now,
+		Variants: []ProcedurePlanVariant{{
+			ID: fp, Plan: CloneProcedurePlan(taskState.Plan), Attempts: 1, Successes: 1, LastUsedUnix: now,
 		}},
 		Attempts:  1,
 		Successes: 1,
 	}, nil
 }
 
-func CloneSkillPlan(p *ports.Plan) *ports.Plan {
+func CloneProcedurePlan(p *ports.Plan) *ports.Plan {
 	if p == nil {
 		return nil
 	}
@@ -187,18 +187,18 @@ func CloneSkillPlan(p *ports.Plan) *ports.Plan {
 	return out
 }
 
-func pathOrCaps(e SkillEntry) []string {
+func pathOrCaps(e ProcedureEntry) []string {
 	if len(e.Path) > 0 {
 		return append([]string(nil), e.Path...)
 	}
 	return append([]string(nil), e.Capabilities...)
 }
 
-// skillVariantRecencyHalfLife is the time after which a variant's success-rate is weighted halfway toward skillVariantRecencyFloor.
-const skillVariantRecencyHalfLife = 7 * 24 * time.Hour
-const skillVariantRecencyFloor = 0.55
+// procedureVariantRecencyHalfLife is the time after which a variant's success-rate is weighted halfway toward procedureVariantRecencyFloor.
+const procedureVariantRecencyHalfLife = 7 * 24 * time.Hour
+const procedureVariantRecencyFloor = 0.55
 
-func bestVariantIndex(vs []SkillPlanVariant, now time.Time, exploreRate float64) int {
+func bestVariantIndex(vs []ProcedurePlanVariant, now time.Time, exploreRate float64) int {
 	if len(vs) == 0 {
 		return -1
 	}
@@ -219,7 +219,7 @@ func bestVariantIndex(vs []SkillPlanVariant, now time.Time, exploreRate float64)
 }
 
 // usableVariantIndices returns indices with a non-empty ID and non-nil Plan (same notion as merge/ persist).
-func usableVariantIndices(vs []SkillPlanVariant) []int {
+func usableVariantIndices(vs []ProcedurePlanVariant) []int {
 	var out []int
 	for i := range vs {
 		if vs[i].ID != "" && vs[i].Plan != nil {
@@ -229,7 +229,7 @@ func usableVariantIndices(vs []SkillPlanVariant) []int {
 	return out
 }
 
-func variantABetter(a, b *SkillPlanVariant, now time.Time) bool {
+func variantABetter(a, b *ProcedurePlanVariant, now time.Time) bool {
 	if a.Attempts == 0 && b.Attempts > 0 {
 		return false
 	}
@@ -251,7 +251,7 @@ func variantABetter(a, b *SkillPlanVariant, now time.Time) bool {
 	return a.Successes > b.Successes
 }
 
-func variantCompositeScore(v *SkillPlanVariant, now time.Time) float64 {
+func variantCompositeScore(v *ProcedurePlanVariant, now time.Time) float64 {
 	return variantRate(v) * variantRecencyMultiplier(v.LastUsedUnix, now)
 }
 
@@ -263,27 +263,27 @@ func variantRecencyMultiplier(lastUsedUnix int64, now time.Time) float64 {
 	if age < 0 {
 		age = 0
 	}
-	hSec := skillVariantRecencyHalfLife.Seconds()
+	hSec := procedureVariantRecencyHalfLife.Seconds()
 	if hSec <= 0 {
 		return 1
 	}
 	decay := math.Exp(-math.Ln2 * age.Seconds() / hSec)
-	return skillVariantRecencyFloor + (1-skillVariantRecencyFloor)*decay
+	return procedureVariantRecencyFloor + (1-procedureVariantRecencyFloor)*decay
 }
 
-func variantRate(v *SkillPlanVariant) float64 {
+func variantRate(v *ProcedurePlanVariant) float64 {
 	if v.Attempts <= 0 {
 		return 0
 	}
 	return float64(v.Successes) / float64(v.Attempts)
 }
 
-func routingSnapshot(e SkillEntry, variantIdx int, matchScore float64) SkillEntry {
+func routingSnapshot(e ProcedureEntry, variantIdx int, matchScore float64) ProcedureEntry {
 	if variantIdx < 0 || variantIdx >= len(e.Variants) {
-		return SkillEntry{}
+		return ProcedureEntry{}
 	}
 	v := e.Variants[variantIdx]
-	out := SkillEntry{
+	out := ProcedureEntry{
 		Name:              e.Name,
 		Keywords:          append([]string(nil), e.Keywords...),
 		Capabilities:      append([]string(nil), e.Capabilities...),
@@ -299,21 +299,21 @@ func routingSnapshot(e SkillEntry, variantIdx int, matchScore float64) SkillEntr
 	return out
 }
 
-func cloneVariantsDeep(vs []SkillPlanVariant) []SkillPlanVariant {
-	out := make([]SkillPlanVariant, len(vs))
+func cloneVariantsDeep(vs []ProcedurePlanVariant) []ProcedurePlanVariant {
+	out := make([]ProcedurePlanVariant, len(vs))
 	for i := range vs {
 		out[i] = cloneVariantDeep(vs[i])
 	}
 	return out
 }
 
-func cloneVariantDeep(v SkillPlanVariant) SkillPlanVariant {
-	return SkillPlanVariant{
+func cloneVariantDeep(v ProcedurePlanVariant) ProcedurePlanVariant {
+	return ProcedurePlanVariant{
 		ID:           v.ID,
 		Attempts:     v.Attempts,
 		Successes:    v.Successes,
 		LastUsedUnix: v.LastUsedUnix,
-		Plan:         CloneSkillPlan(v.Plan),
+		Plan:         CloneProcedurePlan(v.Plan),
 		Params:       cloneParamSpecs(v.Params),
 	}
 }
@@ -325,24 +325,24 @@ func maxInt64(a, b int64) int64 {
 	return b
 }
 
-func cloneParamSpecs(in []SkillParamSpec) []SkillParamSpec {
+func cloneParamSpecs(in []ProcedureParamSpec) []ProcedureParamSpec {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]SkillParamSpec, len(in))
+	out := make([]ProcedureParamSpec, len(in))
 	copy(out, in)
 	return out
 }
 
-// BuildSkillInvocationArgs fills args via BuildInvocationContext with user text only (no trace).
-// Prefer InvokeSkillVariant when trace / from_step_id matter.
-func BuildSkillInvocationArgs(userText string, params []SkillParamSpec) (map[string]any, error) {
+// BuildProcedureInvocationArgs fills args via BuildInvocationContext with user text only (no trace).
+// Prefer InvokeProcedureVariant when trace / from_step_id matter.
+func BuildProcedureInvocationArgs(userText string, params []ProcedureParamSpec) (map[string]any, error) {
 	return BuildInvocationArgs(InvocationContext{UserInput: userText}, params)
 }
 
-// InstantiateSkillPlan renders {{arg_name}} placeholders in step arguments.
-func InstantiateSkillPlan(plan *ports.Plan, args map[string]any) *ports.Plan {
-	out := CloneSkillPlan(plan)
+// InstantiateProcedurePlan renders {{arg_name}} placeholders in step arguments.
+func InstantiateProcedurePlan(plan *ports.Plan, args map[string]any) *ports.Plan {
+	out := CloneProcedurePlan(plan)
 	if out == nil || len(args) == 0 {
 		return out
 	}
@@ -399,7 +399,7 @@ func renderStringTemplate(s string, args map[string]any) any {
 	return out
 }
 
-func cloneSkillEntryForStorage(e SkillEntry) SkillEntry {
+func cloneProcedureEntryForStorage(e ProcedureEntry) ProcedureEntry {
 	e.MatchScore = 0
 	e.SelectedVariantID = ""
 	e.Keywords = append([]string(nil), e.Keywords...)

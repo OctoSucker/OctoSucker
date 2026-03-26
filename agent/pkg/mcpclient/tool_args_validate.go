@@ -6,24 +6,6 @@ import (
 	"slices"
 )
 
-func schemaAsMap(schema any) map[string]any {
-	if schema == nil {
-		return nil
-	}
-	if m, ok := schema.(map[string]any); ok {
-		return m
-	}
-	raw, err := json.Marshal(schema)
-	if err != nil {
-		return nil
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil
-	}
-	return m
-}
-
 func propertyKeysFromSchema(schema map[string]any) (allowed map[string]struct{}, definite bool) {
 	rawProps, has := schema["properties"]
 	if !has || rawProps == nil {
@@ -82,6 +64,24 @@ func ValidateToolArguments(toolName string, args map[string]any, schema any) err
 	allowedList := keysFromSet(allowed)
 	slices.Sort(allowedList)
 	return fmt.Errorf("disallowed argument keys %v (allowed: %v)", disallowed, allowedList)
+}
+
+func schemaAsMap(schema any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	if m, ok := schema.(map[string]any); ok {
+		return m
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return m
 }
 
 func argKeysSorted(args map[string]any) []string {

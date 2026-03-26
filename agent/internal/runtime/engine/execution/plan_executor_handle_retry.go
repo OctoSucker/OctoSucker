@@ -31,6 +31,6 @@ func (x *PlanExecutor) HandleStepCapabilityRetry(ctx context.Context, evt ports.
 		return nil, fmt.Errorf("plan_executor: no alternative capability for step %q", pl.StepID)
 	}
 	st.Capability = capID
-	task.CapChainStepID, task.CapChainTools, task.CapChainNext, task.StepID, task.PendingTool = "", nil, 0, "", ""
+	task.StepID, task.PendingTool = "", ""
 	return x.startPlanStep(ctx, task, pl.StepID)
 }

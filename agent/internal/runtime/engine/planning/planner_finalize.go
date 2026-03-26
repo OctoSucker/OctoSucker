@@ -12,15 +12,23 @@ func (p *Planner) finalizePlan(taskID string, taskState *ports.Task, plan *ports
 	if plan == nil || len(plan.Steps) == 0 {
 		return nil, fmt.Errorf("planner: empty plan")
 	}
-	if len(p.ToolInputSchemas) > 0 {
+	if p.CapRegistry == nil {
+		return nil, fmt.Errorf("planner: nil CapRegistry")
+	}
+	schemas := p.CapRegistry.ToolInputSchemasByName()
+	if len(schemas) > 0 {
 		for _, st := range plan.Steps {
-			schema, ok := p.ToolInputSchemas[st.Capability]
+			ok := p.CapRegistry.CheckStepTool(st.Capability, st.Tool)
 			if !ok {
-				return nil, fmt.Errorf("no input schema for capability %q", st.Capability)
+				return nil, fmt.Errorf("planner: step id=%v", st.ID)
 			}
-			if err := mcpclient.ValidateToolArguments(st.Capability, st.Arguments, schema); err != nil {
+			schema, ok := schemas[st.Tool]
+			if !ok {
+				return nil, fmt.Errorf("no input schema for tool %q (capability %q)", st.Tool, st.Capability)
+			}
+			if err := mcpclient.ValidateToolArguments(st.Tool, st.Arguments, schema); err != nil {
 				log.Printf("engine.Dispatcher: plan arguments invalid task=%s err=%v", taskID, err)
-				return nil, fmt.Errorf("planner: plan tool arguments: step id=%q capability=%q: %w", st.ID, st.Capability, err)
+				return nil, fmt.Errorf("planner: plan tool arguments: step id=%q capability=%q tool=%q: %w", st.ID, st.Capability, st.Tool, err)
 			}
 		}
 	}

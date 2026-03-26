@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/http"
 
 	"github.com/OctoSucker/agent/internal/config"
 	"github.com/OctoSucker/agent/internal/runtime/engine"
@@ -16,12 +15,7 @@ import (
 
 type App struct {
 	Dispatcher *engine.Dispatcher
-
-	// ConversationID when set: single shared task key for all ingress (see config.Workspace.ConversationID).
-	ConversationID string
-
 	Telegram   *telegram.Ingress
-	HTTPServer *http.Server
 	dataDB     *sql.DB
 	shutdown   func()
 }
@@ -42,7 +36,7 @@ func NewFromWorkspace(ctx context.Context, workspaceRoot string, cfg *config.Wor
 		return nil, fmt.Errorf("octoplus: sqlite: %w", err)
 	}
 
-	d, err := engine.NewDispatcher(ctx, mcpRouter, cfg.OpenAI, dataDB, cfg.GraphPathMode, cfg.SkillLearnMinPlanSteps, cfg.SkillLearnMinSuccessCount)
+	d, err := engine.NewDispatcher(ctx, mcpRouter, cfg.OpenAI, dataDB)
 	if err != nil {
 		if cerr := dataDB.Close(); cerr != nil {
 			err = errors.Join(err, fmt.Errorf("close data db: %w", cerr))
@@ -59,13 +53,11 @@ func NewFromWorkspace(ctx context.Context, workspaceRoot string, cfg *config.Wor
 		return nil, fmt.Errorf("octoplus: telegram ingress: %w", err)
 	}
 	a := &App{
-		Dispatcher:     d,
-		ConversationID: cfg.ConversationID,
-		dataDB:         dataDB,
-		shutdown:       shutdown,
-		Telegram:       telegram,
+		Dispatcher: d,
+		dataDB:     dataDB,
+		shutdown:   shutdown,
+		Telegram:   telegram,
 	}
-	a.HTTPServer = &http.Server{Addr: cfg.HTTP.Listen, Handler: a.HTTPHandler()}
 
 	return a, nil
 }

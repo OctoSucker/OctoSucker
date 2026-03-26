@@ -93,7 +93,7 @@ func (r *Runner) ListToolSpecs(ctx context.Context) []mcp.Tool {
 	return out
 }
 
-func (r *Runner) Invoke(ctx context.Context, inv CapabilityInvocation) (ports.ToolResult, error) {
+func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
 	r.mu.Lock()
 	r.names = make(map[string]struct{})
 	var all []mcp.Tool
@@ -133,15 +133,4 @@ func (r *Runner) Invoke(ctx context.Context, inv CapabilityInvocation) (ports.To
 		return ports.ToolResult{}, err
 	}
 	return mcpResultToPorts(res), nil
-}
-
-type CapabilityInvocation struct {
-	ServerName string
-	Tool       string
-	Arguments  map[string]any
-}
-
-type Capability struct {
-	CapabilityName string   `json:"capability_name"`
-	Tools          []string `json:"tools"`
 }

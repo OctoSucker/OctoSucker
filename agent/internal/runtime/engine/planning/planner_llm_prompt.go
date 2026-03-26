@@ -1,10 +1,16 @@
 package planning
 
+import "github.com/OctoSucker/agent/pkg/ports"
+
 func (p *Planner) buildPlannerSystemPrompt() string {
 	system := p.PlanSystemPrompt + "\n\n" + p.ToolAppendix
-	if hint := p.NodeFailures.HintForCapabilities(p.ValidPlanCapabilities); hint != "" {
+	var valid map[string]ports.Capability
+	if p.CapRegistry != nil {
+		valid = p.CapRegistry.AllCapabilities()
+	}
+	if hint := p.NodeFailures.HintForCapabilities(valid); hint != "" {
 		system += "\n\n" + hint
 	}
-	system += "\n\nEach step may include optional \"arguments\": a JSON object used as MCP tools/call arguments for that step. Only keys listed under that tool's params JSON Schema may appear; do not copy the user's message into \"arguments\" unless the schema has a matching field (e.g. send_telegram_message.text). Tools whose schema has no properties must use {} or omit \"arguments\". If one capability runs multiple tools in sequence, the same arguments object is sent to each—use separate steps when schemas differ."
+	system += "\n\nEach step may include optional \"tool\" (required when the chosen capability exposes multiple MCP tools): exact tool name from the appendix. Each step may include optional \"arguments\": only keys allowed by that tool's JSON Schema. If one capability runs multiple tools in sequence without a per-step \"tool\", the runtime uses the first tool only—prefer explicit \"tool\" per step when schemas differ."
 	return system
 }

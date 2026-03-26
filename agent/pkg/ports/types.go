@@ -27,9 +27,9 @@ func (res ToolResult) Observation() Observation {
 type RouteMode string
 
 const (
-	RouteSkill   RouteMode = "skill"
-	RouteGraph   RouteMode = "graph"
-	RoutePlanner RouteMode = "planner"
+	RouteProcedure RouteMode = "procedure"
+	RouteGraph     RouteMode = "graph"
+	RoutePlanner   RouteMode = "planner"
 )
 
 type RoutingContext struct {

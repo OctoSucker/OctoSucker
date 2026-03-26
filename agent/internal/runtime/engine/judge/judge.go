@@ -1,22 +1,18 @@
 package judge
 
 import (
-	"database/sql"
-
 	"github.com/OctoSucker/agent/internal/runtime/store/capability"
 	"github.com/OctoSucker/agent/internal/runtime/store/nodefailure"
+	procedure "github.com/OctoSucker/agent/internal/runtime/store/procedure"
 	"github.com/OctoSucker/agent/internal/runtime/store/recall"
 	routinggraph "github.com/OctoSucker/agent/internal/runtime/store/routing_graph"
-	skill "github.com/OctoSucker/agent/internal/runtime/store/skill"
 	"github.com/OctoSucker/agent/internal/runtime/store/task"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 )
 
 const (
-	maxFailsPerTool       = 2
-	maxFailsPerCap        = 2
-	skillRouteThreshold   = 0.9
-	extractScoreThreshold = 0.8
+	maxFailsPerTool = 2
+	maxFailsPerCap  = 2
 )
 
 // Judge owns post-execution evaluation and finalization handlers.
@@ -27,27 +23,19 @@ type Judge struct {
 	RecallArchiver   *RecallArchiver
 }
 
-func New(
+func NewJudge(
 	tasks *task.TaskStore,
 	routeGraph *routinggraph.RoutingGraph,
-	skills *skill.SkillRegistry,
+	procedures *procedure.ProcedureRegistry,
 	capReg *capability.CapabilityRegistry,
 	trajectoryLLM *llmclient.OpenAI,
 	recallCorpus *recall.RecallCorpus,
 	nodeFailures *nodefailure.NodeFailureStats,
-	sqlDB *sql.DB,
-	skillLearnMinPlanSteps int,
-	skillLearnMinSuccessCount int,
 ) *Judge {
 	learner := &Learner{
-		Tasks:                          tasks,
-		Skills:                         skills,
-		RouteGraph:                     routeGraph,
-		SkillRouteThreshold:            skillRouteThreshold,
-		ExtractScoreThreshold:          extractScoreThreshold,
-		SQLDB:                          sqlDB,
-		MinPlanStepsForSkillExtract:    skillLearnMinPlanSteps,
-		MinQualifyingSuccessesForSkill: skillLearnMinSuccessCount,
+		Tasks:      tasks,
+		Procedures: procedures,
+		RouteGraph: routeGraph,
 	}
 	archiver := &RecallArchiver{
 		Tasks:  tasks,

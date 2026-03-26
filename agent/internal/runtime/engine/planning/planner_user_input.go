@@ -7,6 +7,10 @@ import (
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
+const graphRouteThreshold = 0.7
+const procedureRouteThreshold = 0.9
+const keywordConfidenceThreshold = 0.92
+
 func (p *Planner) HandleUserInput(ctx context.Context, evt ports.Event) (*ports.Event, error) {
 	pl := evt.Payload.(ports.PayloadUserInput)
 	taskState, err := p.Tasks.GetOrCreate(pl.TaskID)
@@ -27,33 +31,40 @@ func (p *Planner) HandleUserInput(ctx context.Context, evt ports.Event) (*ports.
 	taskState.Trace = nil
 	taskState.ToolFailCount = nil
 	taskState.CapabilityFailCount = nil
-	taskState.SkillPriorCaps = nil
-	taskState.SkillPreferredPath = nil
-	taskState.ActiveSkillName = ""
-	taskState.ActiveSkillVariantID = ""
+	taskState.ProcedurePriorCaps = nil
+	taskState.ProcedurePreferredPath = nil
+	taskState.ActiveProcedureName = ""
+	taskState.ActiveProcedureVariantID = ""
 	taskState.RoutePolicy = nil
 	taskState.TransitionPath = nil
 	taskState.GraphPathMode = p.DefaultGraphPathMode
 
-	embeddingHit, err := p.Skills.MatchBestByText(ctx, pl.Text)
+	embeddingHit, err := p.Procedures.MatchBestByText(ctx, pl.Text)
 	if err != nil {
 		return nil, err
 	}
-	keywordHit := p.Skills.KeywordPlanHit(pl.Text)
+	keywordHit := p.Procedures.KeywordPlanHit(pl.Text)
+
+	// default to planner
 	routeDec := &ports.RoutePolicyDecision{Type: ports.RouteTypePlanner, Confidence: 0}
-	if embeddingHit != nil && embeddingHit.MatchScore >= p.SkillRouteThreshold {
-		routeDec = &ports.RoutePolicyDecision{Type: ports.RouteTypeEmbeddingSkill, Confidence: embeddingHit.MatchScore}
+
+	// embedding procedure
+	if embeddingHit != nil && embeddingHit.MatchScore >= procedureRouteThreshold {
+		routeDec = &ports.RoutePolicyDecision{Type: ports.RouteTypeEmbeddingProcedure, Confidence: embeddingHit.MatchScore}
 	}
-	if keywordHit != nil && keywordHit.SelectedPlan() != nil && p.KeywordConfidence > routeDec.Confidence {
-		routeDec = &ports.RoutePolicyDecision{Type: ports.RouteTypeKeywordSkill, Confidence: p.KeywordConfidence}
+
+	// keyword procedure
+	if keywordHit != nil && keywordHit.SelectedPlan() != nil && keywordConfidenceThreshold > routeDec.Confidence {
+		routeDec = &ports.RoutePolicyDecision{Type: ports.RouteTypeKeywordProcedure, Confidence: keywordConfidenceThreshold}
 	}
-	graphConfidence := 0.0
-	if p.RouteGraph != nil {
-		graphConfidence = p.RouteGraph.Confidence(ctx, ports.RoutingContext{IntentText: pl.Text}, "")
-	}
-	if graphConfidence >= p.GraphRouteThreshold && graphConfidence > routeDec.Confidence {
+
+	// graph confidence
+	graphConfidence := p.RouteGraph.Confidence(ctx, ports.RoutingContext{IntentText: pl.Text}, "")
+	if graphConfidence >= graphRouteThreshold && graphConfidence > routeDec.Confidence {
 		routeDec = &ports.RoutePolicyDecision{Type: ports.RouteTypeGraphConfidence, Confidence: graphConfidence}
 	}
+
+	// heuristic complex request
 	lower := strings.ToLower(pl.Text)
 	if pl.Text != "" && (strings.Contains(lower, "然后") || strings.Contains(lower, " and ") || strings.Contains(lower, " then ")) {
 		if 0.05 > routeDec.Confidence {
@@ -64,8 +75,10 @@ func (p *Planner) HandleUserInput(ctx context.Context, evt ports.Event) (*ports.
 	if err := p.Tasks.Put(taskState); err != nil {
 		return nil, err
 	}
-	if routeDec.Type == ports.RouteTypeEmbeddingSkill || routeDec.Type == ports.RouteTypeKeywordSkill {
-		return ports.EventPtr(ports.Event{Type: ports.EvSkillPlanRequested, Payload: ports.PayloadSkillPlanRequested{TaskID: pl.TaskID}}), nil
+
+	if routeDec.Type == ports.RouteTypeEmbeddingProcedure || routeDec.Type == ports.RouteTypeKeywordProcedure {
+		return ports.EventPtr(ports.Event{Type: ports.EvProcedurePlanRequested, Payload: ports.PayloadProcedurePlanRequested{TaskID: pl.TaskID}}), nil
+	} else {
+		return ports.EventPtr(ports.Event{Type: ports.EvLLMPlanRequested, Payload: ports.PayloadLLMPlanRequested{TaskID: pl.TaskID}}), nil
 	}
-	return ports.EventPtr(ports.Event{Type: ports.EvLLMPlanRequested, Payload: ports.PayloadLLMPlanRequested{TaskID: pl.TaskID}}), nil
 }

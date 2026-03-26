@@ -4,11 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/OctoSucker/agent/internal/runtime/store"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
-
-// Must match store/tables.go migrate (TableSessions — legacy table name, stores Task JSON).
-const sqliteTableSessions = "sessions"
 
 func marshalTask(t *ports.Task) ([]byte, error) {
 	b, err := json.Marshal(t)
@@ -19,7 +17,7 @@ func marshalTask(t *ports.Task) ([]byte, error) {
 }
 
 func (s *TaskStore) loadAll() error {
-	rows, err := s.db.Query(fmt.Sprintf(`SELECT id, payload FROM %s`, sqliteTableSessions))
+	rows, err := s.db.Query(fmt.Sprintf(`SELECT id, payload FROM %s`, store.TableTasks))
 	if err != nil {
 		return fmt.Errorf("task store load: %w", err)
 	}
@@ -49,7 +47,7 @@ func (s *TaskStore) persistPut(id string, payload []byte) error {
 		return nil
 	}
 	if _, err := s.db.Exec(fmt.Sprintf(`INSERT INTO %s (id, payload) VALUES (?, ?)
-			ON CONFLICT(id) DO UPDATE SET payload = excluded.payload`, sqliteTableSessions), id, string(payload)); err != nil {
+			ON CONFLICT(id) DO UPDATE SET payload = excluded.payload`, store.TableTasks), id, string(payload)); err != nil {
 		return fmt.Errorf("task store put: db: %w", err)
 	}
 	return nil

@@ -13,14 +13,14 @@ import (
 
 // SQLite table names (single source of truth for migrations and queries).
 const (
-	TableSessions           = "sessions"
-	TableRoutingEdges       = "routing_edges"
-	TableRoutingMeta        = "routing_meta"
-	TableRecallChunks       = "recall_chunks"
-	TableSkills             = "skills"
-	TableSkillVariants      = "skill_variants"
-	TableNodeFailureStats   = "node_failure_stats"
-	TableSkillLearnProgress = "skill_learn_progress"
+	TableTasks                  = "tasks"
+	TableRoutingEdges           = "routing_edges"
+	TableRoutingMeta            = "routing_meta"
+	TableRecallChunks           = "recall_chunks"
+	TableProcedures             = "procedures"
+	TableProcedureVariants      = "procedure_variants"
+	TableNodeFailureStats       = "node_failure_stats"
+	TableProcedureLearnProgress = "procedure_learn_progress"
 )
 
 // DefaultSQLiteRelPath is created under the workspace root: data/octoplus.sqlite
@@ -73,7 +73,7 @@ func migrateAgentDB(db *sql.DB) error {
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			id TEXT PRIMARY KEY,
 			payload TEXT NOT NULL
-		)`, TableSessions),
+		)`, TableTasks),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			from_cap TEXT NOT NULL,
 			to_cap TEXT NOT NULL,
@@ -101,18 +101,18 @@ func migrateAgentDB(db *sql.DB) error {
 			attempts INTEGER NOT NULL DEFAULT 0,
 			successes INTEGER NOT NULL DEFAULT 0,
 			last_used_unix INTEGER NOT NULL DEFAULT 0
-		)`, TableSkills),
+		)`, TableProcedures),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-			skill_name TEXT NOT NULL,
+			procedure_name TEXT NOT NULL,
 			variant_id TEXT NOT NULL,
 			plan_json TEXT NOT NULL,
 			params_json TEXT NOT NULL DEFAULT '[]',
 			attempts INTEGER NOT NULL DEFAULT 0,
 			successes INTEGER NOT NULL DEFAULT 0,
 			last_used_unix INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (skill_name, variant_id),
-			FOREIGN KEY (skill_name) REFERENCES %s(name) ON DELETE CASCADE
-		)`, TableSkillVariants, TableSkills),
+			PRIMARY KEY (procedure_name, variant_id),
+			FOREIGN KEY (procedure_name) REFERENCES %s(name) ON DELETE CASCADE
+		)`, TableProcedureVariants, TableProcedures),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			dedup_key TEXT PRIMARY KEY,
 			capability TEXT NOT NULL,
@@ -128,7 +128,7 @@ func migrateAgentDB(db *sql.DB) error {
 			cap_key TEXT PRIMARY KEY,
 			success_count INTEGER NOT NULL DEFAULT 0,
 			last_success_unix INTEGER NOT NULL DEFAULT 0
-		)`, TableSkillLearnProgress),
+		)`, TableProcedureLearnProgress),
 	}
 	for _, q := range stmts {
 		if _, err := db.Exec(q); err != nil {

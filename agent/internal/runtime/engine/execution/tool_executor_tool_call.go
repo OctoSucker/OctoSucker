@@ -23,10 +23,10 @@ func (x *ToolExecutor) HandleToolCall(ctx context.Context, evt ports.Event) (*po
 		"tool_executor: invoke start task=%s step=%s capability=%s tool=%s args=%v",
 		pl.TaskID, pl.StepID, pl.Capability, pl.Tool, pl.Arguments,
 	)
-	res, err := x.Invoker.Invoke(ctx, mcpclient.CapabilityInvocation{
-		ServerName: pl.Capability,
-		Tool:       pl.Tool,
-		Arguments:  pl.Arguments,
+	res, err := x.Invoker.Invoke(ctx, ports.CapabilityInvocation{
+		CapabilityName: pl.Capability,
+		Tool:           pl.Tool,
+		Arguments:      pl.Arguments,
 	})
 	if err != nil {
 		res = ports.ToolResult{OK: false, Err: err}

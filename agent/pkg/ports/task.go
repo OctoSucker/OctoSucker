@@ -12,8 +12,8 @@ type RouteType string
 
 const (
 	RouteTypePlanner                 RouteType = "planner"
-	RouteTypeEmbeddingSkill          RouteType = "embedding_skill"
-	RouteTypeKeywordSkill            RouteType = "keyword_skill"
+	RouteTypeEmbeddingProcedure      RouteType = "embedding_procedure"
+	RouteTypeKeywordProcedure        RouteType = "keyword_procedure"
 	RouteTypeGraphConfidence         RouteType = "graph_confidence"
 	RouteTypeHeuristicComplexRequest RouteType = "heuristic_complex_request"
 )
@@ -45,8 +45,8 @@ func (d *RoutePolicyDecision) UnmarshalJSON(b []byte) error {
 	d.Type = legacy.Reason
 	if d.Type == "" {
 		switch legacy.Mode {
-		case RouteSkill:
-			d.Type = RouteTypeEmbeddingSkill
+		case RouteProcedure:
+			d.Type = RouteTypeEmbeddingProcedure
 		case RouteGraph:
 			d.Type = RouteTypeGraphConfidence
 		default:
@@ -84,13 +84,13 @@ type TransitionStep struct {
 }
 
 type RouteSnap struct {
-	LastCap       string
-	LastOut       int
-	UserInput     string
-	SkillPrior    []string
-	Preferred     []string
-	RouteType     RouteType
-	GraphPathMode GraphPathMode
+	LastCap        string
+	LastOut        int
+	UserInput      string
+	ProcedurePrior []string
+	Preferred      []string
+	RouteType      RouteType
+	GraphPathMode  GraphPathMode
 }
 
 // Task 是单次用户消息触发的、贯穿 Planner → 执行 → 评判 的可变状态，随 Ev* 处理链读写并持久化。
@@ -110,19 +110,16 @@ type Task struct {
 	Plan *Plan `json:"plan,omitempty"`
 
 	// --- EvUserInput（Planner）：路由与技能先验；之后 PlanExec（RouteSnap）与 StepCritic 读取 ---
-	RoutePolicy          *RoutePolicyDecision `json:"route_policy,omitempty"`    // mode/confidence/reason；RouteSnap 取 Mode
-	GraphPathMode        GraphPathMode        `json:"graph_path_mode,omitempty"` // greedy vs global；见 GraphPathMode
-	SkillPriorCaps       []string             `json:"skill_prior_caps,omitempty"`
-	SkillPreferredPath   []string             `json:"skill_preferred_path,omitempty"`
-	ActiveSkillName      string               `json:"active_skill_name,omitempty"`       // EvTurnFinalized 学习归因 RecordTurn
-	ActiveSkillVariantID string               `json:"active_skill_variant_id,omitempty"` // 同上
+	RoutePolicy              *RoutePolicyDecision `json:"route_policy,omitempty"`    // mode/confidence/reason；RouteSnap 取 Mode
+	GraphPathMode            GraphPathMode        `json:"graph_path_mode,omitempty"` // greedy vs global；见 GraphPathMode
+	ProcedurePriorCaps       []string             `json:"procedure_prior_caps,omitempty"`
+	ProcedurePreferredPath   []string             `json:"procedure_preferred_path,omitempty"`
+	ActiveProcedureName      string               `json:"active_procedure_name,omitempty"`       // EvTurnFinalized 学习归因 RecordTurn
+	ActiveProcedureVariantID string               `json:"active_procedure_variant_id,omitempty"` // 同上
 
-	// --- EvPlanProgressed / EvStepCapabilityRetry（PlanExec）：当前步、待执行工具、能力多工具链 ---
-	StepID         string   `json:"step_id,omitempty"`
-	PendingTool    string   `json:"pending_tool,omitempty"`
-	CapChainStepID string   `json:"cap_chain_step_id,omitempty"`
-	CapChainTools  []string `json:"cap_chain_tools,omitempty"`
-	CapChainNext   int      `json:"cap_chain_next,omitempty"`
+	// --- EvPlanProgressed / EvStepCapabilityRetry（PlanExec）：当前步、待执行工具 ---
+	StepID      string `json:"step_id,omitempty"`
+	PendingTool string `json:"pending_tool,omitempty"`
 
 	// --- EvObservationReady（StepCritic）：工具观测后的重试/换能力决策；Planner 每轮开始会清空其中多数 ---
 	// Trace：StepCritic 追加；PlanExec 在批量步进时也可能追加。LastCapability/LastOutcome：StepCritic 与 PlanExec 均会更新。
@@ -157,13 +154,13 @@ func (t *Task) RouteSnap() (RouteSnap, error) {
 		gpm = GraphPathGreedy
 	}
 	return RouteSnap{
-		LastCap:       t.LastCapability,
-		LastOut:       t.LastOutcome,
-		UserInput:     t.UserInput.Text,
-		SkillPrior:    append([]string(nil), t.SkillPriorCaps...),
-		Preferred:     append([]string(nil), t.SkillPreferredPath...),
-		RouteType:     t.RoutePolicy.Type,
-		GraphPathMode: gpm,
+		LastCap:        t.LastCapability,
+		LastOut:        t.LastOutcome,
+		UserInput:      t.UserInput.Text,
+		ProcedurePrior: append([]string(nil), t.ProcedurePriorCaps...),
+		Preferred:      append([]string(nil), t.ProcedurePreferredPath...),
+		RouteType:      t.RoutePolicy.Type,
+		GraphPathMode:  gpm,
 	}, nil
 }
 

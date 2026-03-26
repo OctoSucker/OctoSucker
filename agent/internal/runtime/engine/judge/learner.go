@@ -2,92 +2,89 @@ package judge
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 
+	procedure "github.com/OctoSucker/agent/internal/runtime/store/procedure"
 	routinggraph "github.com/OctoSucker/agent/internal/runtime/store/routing_graph"
-	skill "github.com/OctoSucker/agent/internal/runtime/store/skill"
 	"github.com/OctoSucker/agent/internal/runtime/store/task"
 	"github.com/OctoSucker/agent/pkg/ports"
 )
 
+const procedureRouteThreshold = 0.9
+const extractScoreThreshold = 0.8
+const minPlanStepsForProcedureExtract = 3
+const minQualifyingSuccessesForProcedure = 2
+const successThreshold = 0.5
+
 type Learner struct {
-	Tasks                 *task.TaskStore
-	Skills                *skill.SkillRegistry
-	RouteGraph            *routinggraph.RoutingGraph
-	SkillRouteThreshold   float64
-	ExtractScoreThreshold float64
-	// SQLDB backs skill_learn_progress (N qualifying successes per cap path). Nil disables counter and restores immediate extract on qualify.
-	SQLDB *sql.DB
-	// MinPlanStepsForSkillExtract: require at least this many plan steps before counting / extracting (0 = no minimum).
-	MinPlanStepsForSkillExtract int
-	// MinQualifyingSuccessesForSkill: cumulative qualifying successes per cap_key before MergeOrAdd; <=0 or 1 with DB acts like first success extracts.
-	MinQualifyingSuccessesForSkill int
+	Tasks      *task.TaskStore
+	Procedures *procedure.ProcedureRegistry
+	RouteGraph *routinggraph.RoutingGraph
 }
 
-func (l *Learner) RecordSkillLearning(ctx context.Context, evt ports.Event) error {
+func (l *Learner) RecordProcedureLearning(ctx context.Context, evt ports.Event) error {
 	pl := evt.Payload.(ports.PayloadTurnFinalized)
 	taskState, ok := l.Tasks.Get(pl.TaskID)
 	if !ok {
 		return fmt.Errorf("turnfinalized: task not found: %s", pl.TaskID)
 	}
-	success := taskState.TrajectoryScore >= 0.5
-	emb, err := l.Skills.EmbedText(ctx, taskState.UserInput.Text)
+	success := taskState.TrajectoryScore >= successThreshold
+	emb, err := l.Procedures.EmbedText(ctx, taskState.UserInput.Text)
 	if err != nil {
 		return err
 	}
-	if err := l.Skills.RecordTurn(taskState.UserInput.Text, success, emb, l.SkillRouteThreshold, taskState.ActiveSkillName, taskState.ActiveSkillVariantID); err != nil {
+	if err := l.Procedures.RecordTurn(taskState.UserInput.Text, success, emb, procedureRouteThreshold, taskState.ActiveProcedureName, taskState.ActiveProcedureVariantID); err != nil {
 		return err
 	}
 	if len(taskState.TransitionPath) > 0 {
-		if err := l.RouteGraph.RecordTrajectory(taskState.TransitionPath, float64(taskState.TrajectoryScore), success); err != nil {
+		if err := l.RouteGraph.RecordTrajectory(taskState.TransitionPath, taskState.TrajectoryScore, success); err != nil {
 			return fmt.Errorf("turnfinalized: record trajectory: %w", err)
 		}
 	}
-	if success && float64(taskState.TrajectoryScore) >= l.ExtractScoreThreshold {
-		if err := l.maybeExtractSkillFromTask(ctx, taskState); err != nil {
+	if success && float64(taskState.TrajectoryScore) >= extractScoreThreshold {
+		if err := l.maybeExtractProcedureFromTask(ctx, taskState); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// maybeExtractSkillFromTask applies min plan steps + N qualifying successes (per capability path) before MergeOrAdd.
-func (l *Learner) maybeExtractSkillFromTask(ctx context.Context, taskState *ports.Task) error {
+// maybeExtractProcedureFromTask applies min plan steps + N qualifying successes (per capability path) before MergeOrAdd.
+func (l *Learner) maybeExtractProcedureFromTask(ctx context.Context, taskState *ports.Task) error {
 	if taskState == nil {
 		return nil
 	}
-	capKey, nSteps, ok := skill.SkillLearnCapKeyFromTask(taskState)
+	capKey, nSteps, ok := procedure.ProcedureLearnCapKeyFromTask(taskState)
 	if !ok {
 		return nil
 	}
-	if l.MinPlanStepsForSkillExtract > 0 && nSteps < l.MinPlanStepsForSkillExtract {
+	if minPlanStepsForProcedureExtract > 0 && nSteps < minPlanStepsForProcedureExtract {
 		return nil
 	}
-	nNeed := l.MinQualifyingSuccessesForSkill
+	nNeed := minQualifyingSuccessesForProcedure
 	if nNeed <= 0 {
 		nNeed = 1
 	}
-	c, err := skill.BumpSkillLearnSuccessCount(l.SQLDB, capKey)
+	c, err := l.Procedures.BumpProcedureLearnSuccessCount(capKey)
 	if err != nil {
-		return fmt.Errorf("turnfinalized: bump skill learn progress cap_key=%s: %w", capKey, err)
+		return fmt.Errorf("turnfinalized: bump procedure learn progress cap_key=%s: %w", capKey, err)
 	}
 	if c < nNeed {
 		return nil
 	}
-	entry, err := l.Skills.BuildEntryFromTask(ctx, taskState)
-	if errors.Is(err, skill.ErrNoSkillFromTask) {
+	entry, err := l.Procedures.BuildEntryFromTask(ctx, taskState)
+	if errors.Is(err, procedure.ErrNoProcedureFromTask) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if err := l.Skills.MergeOrAdd(entry); err != nil {
+	if err := l.Procedures.MergeOrAdd(entry); err != nil {
 		return err
 	}
-	if err := skill.ResetSkillLearnSuccessCount(l.SQLDB, capKey); err != nil {
-		return fmt.Errorf("turnfinalized: reset skill learn progress cap_key=%s: %w", capKey, err)
+	if err := l.Procedures.ResetProcedureLearnSuccessCount(capKey); err != nil {
+		return fmt.Errorf("turnfinalized: reset procedure learn progress cap_key=%s: %w", capKey, err)
 	}
 	return nil
 }

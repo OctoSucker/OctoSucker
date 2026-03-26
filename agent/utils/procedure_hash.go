@@ -25,6 +25,7 @@ func PlanSemanticFingerprint(p *ports.Plan) string {
 	type sigStep struct {
 		ID         string         `json:"id"`
 		Capability string         `json:"capability"`
+		Tool       string         `json:"tool,omitempty"`
 		Goal       string         `json:"goal"`
 		DependsOn  []string       `json:"depends_on"`
 		Arguments  map[string]any `json:"arguments,omitempty"`
@@ -34,7 +35,7 @@ func PlanSemanticFingerprint(p *ports.Plan) string {
 		dep := append([]string(nil), st.DependsOn...)
 		sort.Strings(dep)
 		steps[i] = sigStep{
-			ID: st.ID, Capability: st.Capability, Goal: st.Goal,
+			ID: st.ID, Capability: st.Capability, Tool: st.Tool, Goal: st.Goal,
 			DependsOn: dep, Arguments: maps.Clone(st.Arguments),
 		}
 	}

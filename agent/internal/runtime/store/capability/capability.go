@@ -5,12 +5,13 @@ import (
 	"fmt"
 
 	"github.com/OctoSucker/agent/pkg/mcpclient"
+	"github.com/OctoSucker/agent/pkg/ports"
 )
 
 // CapabilityRegistry wraps MCPRouter: snapshot of ListCapabilities at construction, plus the router for tool input schemas.
 type CapabilityRegistry struct {
 	mcp  *mcpclient.MCPRouter
-	caps map[string]mcpclient.Capability
+	caps map[string]ports.Capability
 }
 
 // NewCapabilityRegistry loads capabilities once from the MCP router.
@@ -22,7 +23,7 @@ func NewCapabilityRegistry(ctx context.Context, mcp *mcpclient.MCPRouter) (*Capa
 	if err != nil {
 		return nil, err
 	}
-	caps := make(map[string]mcpclient.Capability, len(toolsByServer))
+	caps := make(map[string]ports.Capability, len(toolsByServer))
 	for server, tools := range toolsByServer {
 		toolNames := make([]string, 0, len(tools))
 		for _, t := range tools {
@@ -31,17 +32,17 @@ func NewCapabilityRegistry(ctx context.Context, mcp *mcpclient.MCPRouter) (*Capa
 			}
 			toolNames = append(toolNames, t.Name)
 		}
-		caps[server] = mcpclient.Capability{CapabilityName: server, Tools: toolNames}
+		caps[server] = ports.Capability{CapabilityName: server, Tools: toolNames}
 	}
 
 	return &CapabilityRegistry{mcp: mcp, caps: caps}, nil
 }
 
 // AllCapabilities returns a snapshot for read-only routing/planner use.
-func (r *CapabilityRegistry) AllCapabilities() map[string]mcpclient.Capability {
-	out := make(map[string]mcpclient.Capability, len(r.caps))
+func (r *CapabilityRegistry) AllCapabilities() map[string]ports.Capability {
+	out := make(map[string]ports.Capability, len(r.caps))
 	for k, v := range r.caps {
-		out[k] = mcpclient.Capability{CapabilityName: v.CapabilityName, Tools: append([]string(nil), v.Tools...)}
+		out[k] = ports.Capability{CapabilityName: v.CapabilityName, Tools: append([]string(nil), v.Tools...)}
 	}
 	return out
 }
@@ -66,12 +67,23 @@ func (r *CapabilityRegistry) FirstTool(capID string) string {
 	return c.Tools[0]
 }
 
-func (r *CapabilityRegistry) Tools(capID string) []string {
+func (r *CapabilityRegistry) Tools(capID string) ([]string, error) {
 	c, ok := r.caps[capID]
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("capability: capability %q not found", capID)
 	}
-	out := make([]string, len(c.Tools))
-	copy(out, c.Tools)
-	return out
+	return c.Tools, nil
+}
+
+func (r *CapabilityRegistry) CheckStepTool(capID, tool string) bool {
+	tools, err := r.Tools(capID)
+	if err != nil {
+		return false
+	}
+	for _, name := range tools {
+		if name == tool {
+			return true
+		}
+	}
+	return false
 }
