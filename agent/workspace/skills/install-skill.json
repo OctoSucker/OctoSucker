@@ -1,0 +1,37 @@
+{
+  "name": "Install Skill From URL",
+  "description": "Installs a skill by downloading a markdown file from a given URL and loading it into the skills directory.",
+  "cautions": "Ensure the URL is valid and points to a raw markdown file; avoid using absolute host paths during installation.",
+  "source_path": "/Users/zecrey/Desktop/OctoSucker/OctoSucker/agent/workspace/skills/install-skill.md",
+  "capabilities": [
+    {
+      "capability": "skills",
+      "tools": [
+        {
+          "name": "get_skills_root_dir",
+          "description": "Retrieves the root directory where skills are stored.",
+          "usage": "Used to determine the base directory for installing new skills."
+        },
+        {
+          "name": "reload_skills",
+          "description": "Reloads all available skills after a new one is installed.",
+          "usage": "Invoked after the skill file is downloaded to make the new skill active."
+        }
+      ]
+    },
+    {
+      "capability": "exec",
+      "tools": [
+        {
+          "name": "run_command",
+          "description": "Executes shell commands to create directories and download files.",
+          "usage": "Used to create a skill folder and download the skill markdown file as SKILL.md.",
+          "input_schema": {
+            "command": "string",
+            "work_dir": "string"
+          }
+        }
+      ]
+    }
+  ]
+}

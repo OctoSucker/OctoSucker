@@ -1,15 +1,22 @@
 {
-  "conversation_id": "owner",
-  "graph_path_mode": "greedy",
-  "procedure_learn_min_plan_steps": 3,
-  "procedure_learn_min_success_count": 2,
   "openai": {
     "api_key": "sk-xxx",
     "base_url": "https://api.openai.com/v1",
     "model": "gpt-4o-mini",
     "embedding_model": "text-embedding-3-small"
   },
-  "mcp_endpoint": ["http://127.0.0.1:8765/mcp"],
+  "mcp_endpoint": [],
+  "exec": {
+    "workspace_dirs": ["."],
+    "command_timeout_sec": 30,
+    "command_blacklist": ["rm -rf /", "shutdown", "reboot"],
+    "container_runtime": "docker",
+    "container_image": "octosucker-exec-sandbox:latest",
+    "container_name": "octosucker-agent-sandbox",
+    "container_workspace_dir": ".",
+    "container_readonly_root": true,
+    "container_user": "65532:65532"
+  },
   "http": {
     "listen": ":8080"
   },
@@ -17,5 +24,6 @@
     "bot_token": "YOUR_BOT_TOKEN",
     "default_chat_id": 1,
     "allowed_chat_ids": []
-  }
+  },
+  "skills_dir": "skills"
 }

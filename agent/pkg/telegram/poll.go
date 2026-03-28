@@ -28,7 +28,8 @@ func splitMessages(s string) []string {
 }
 
 // OnTelegramMessage is invoked for each allowed text message; chatID is the sender chat for replies.
-type OnTelegramMessage func(ctx context.Context, chatID int64, text string) (string, error)
+// Return one or more strings to send as separate messages in order (e.g. tool output then trajectory note).
+type OnTelegramMessage func(ctx context.Context, chatID int64, text string) ([]string, error)
 
 func (c Ingress) RunPoll(ctx context.Context, onMessage OnTelegramMessage) error {
 	bot, err := tgbotapi.NewBotAPI(c.Token)
@@ -66,16 +67,18 @@ func (c Ingress) RunPoll(ctx context.Context, onMessage OnTelegramMessage) error
 				log.Printf("telegram ingress: drop chat_id=%d (not allowed)", chatID)
 				continue
 			}
-			reply, runErr := onMessage(ctx, chatID, msg.Text)
+			replies, runErr := onMessage(ctx, chatID, msg.Text)
 			if runErr != nil {
 				if _, err := bot.Send(tgbotapi.NewMessage(chatID, "error: "+runErr.Error())); err != nil {
 					log.Printf("telegram ingress: send error message chat_id=%d: %v", chatID, err)
 				}
 				continue
 			}
-			for _, part := range splitMessages(reply) {
-				if _, err := bot.Send(tgbotapi.NewMessage(chatID, part)); err != nil {
-					log.Printf("telegram ingress: send chat_id=%d: %v", chatID, err)
+			for _, reply := range replies {
+				for _, part := range splitMessages(reply) {
+					if _, err := bot.Send(tgbotapi.NewMessage(chatID, part)); err != nil {
+						log.Printf("telegram ingress: send chat_id=%d: %v", chatID, err)
+					}
 				}
 			}
 		}

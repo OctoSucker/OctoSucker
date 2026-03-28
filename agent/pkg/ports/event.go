@@ -11,14 +11,11 @@ type Event struct {
 func EventPtr(e Event) *Event { return &e }
 
 const (
-	EvUserInput              = "UserInput"              // Planner：路由、计划、技能先验等 → Task 分段「EvUserInput」与「贯穿」
-	EvProcedurePlanRequested = "ProcedurePlanRequested" // Planner：技能路线生成计划
-	EvLLMPlanRequested       = "LLMPlanRequested"       // Planner：LLM 路线生成计划
-	EvPlanProgressed         = "PlanProgressed"         // PlanExec：推进计划（初始 Plan 已就绪 或 任一步完成后继续步进）
-	EvToolsBound             = "ToolsBound"             // 预留
-	EvToolCall               = "ToolCall"               // ToolExec → 随后 ObservationReady
-	EvObservationReady       = "ObservationReady"       // StepCritic：Trace、重试/换能力、Plan 步骤 → Task 分段「ObservationReady」
-	EvStepCapabilityRetry    = "StepCapabilityRetry"    // PlanExec：换能力重试同一步
-	EvTrajectoryCheck        = "TrajectoryCheck"        // TrajectoryCritic：Reply、轨迹分、可能 EvUserInput 重规划
-	EvTurnFinalized          = "TurnFinalized"          // 收尾学习：TransitionPath、ActiveProcedure*、UserInput 等
+	EvUserInput           = "UserInput"           // Planner：路由、计划、技能先验等 → Task 分段「EvUserInput」与「贯穿」
+	EvPlanProgressed      = "PlanProgressed"      // 尚无 Plan 时 Planner 补全；已有 Plan 时 PlanExec 推进步进
+	EvToolsBound          = "ToolsBound"          // 预留
+	EvToolCall            = "ToolCall"            // ToolExec → 随后 ObservationReady
+	EvObservationReady    = "ObservationReady"    // StepCritic：Trace、重试/换能力、Plan 步骤 → Task 分段「ObservationReady」
+	EvTrajectoryCheck     = "TrajectoryCheck"     // TrajectoryCritic：Reply、轨迹分、可能 EvUserInput 重规划
+	EvTurnFinalized       = "TurnFinalized"       // 收尾学习：TransitionPath、ActiveProcedure*、UserInput 等
 )

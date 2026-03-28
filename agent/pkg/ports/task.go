@@ -18,50 +18,28 @@ const (
 	RouteTypeHeuristicComplexRequest RouteType = "heuristic_complex_request"
 )
 
-type RoutePolicyDecision struct {
-	Type       RouteType `json:"type"`
-	Confidence float64   `json:"confidence"`
+type StepTrace struct {
+	StepID     string `json:"step_id"`
+	Tool       string `json:"tool"`
+	OK         bool   `json:"ok"`
+	Summary    string `json:"summary"`
+	Structured any    `json:"structured,omitempty"`
 }
 
-func (d *RoutePolicyDecision) UnmarshalJSON(b []byte) error {
-	type v2 struct {
-		Type       RouteType `json:"type"`
-		Confidence float64   `json:"confidence"`
+// PrimaryText prefers pretty JSON of Structured on success; otherwise Summary (errors or legacy).
+func (t StepTrace) PrimaryText() string {
+	if !t.OK {
+		return t.Summary
 	}
-	var x2 v2
-	if err := json.Unmarshal(b, &x2); err == nil && x2.Type != "" {
-		d.Type = x2.Type
-		d.Confidence = x2.Confidence
-		return nil
-	}
-	var legacy struct {
-		Mode       RouteMode `json:"mode"`
-		Confidence float64   `json:"confidence"`
-		Reason     RouteType `json:"reason,omitempty"`
-	}
-	if err := json.Unmarshal(b, &legacy); err != nil {
-		return err
-	}
-	d.Type = legacy.Reason
-	if d.Type == "" {
-		switch legacy.Mode {
-		case RouteProcedure:
-			d.Type = RouteTypeEmbeddingProcedure
-		case RouteGraph:
-			d.Type = RouteTypeGraphConfidence
-		default:
-			d.Type = RouteTypePlanner
+	if t.Structured != nil {
+		if b, err := json.MarshalIndent(t.Structured, "", "  "); err == nil {
+			return string(b)
+		}
+		if b, err := json.Marshal(t.Structured); err == nil {
+			return string(b)
 		}
 	}
-	d.Confidence = legacy.Confidence
-	return nil
-}
-
-type StepTrace struct {
-	StepID  string `json:"step_id"`
-	Tool    string `json:"tool"`
-	OK      bool   `json:"ok"`
-	Summary string `json:"summary"`
+	return t.Summary
 }
 
 type Decision struct {
@@ -83,14 +61,16 @@ type TransitionStep struct {
 	To   string `json:"to"`
 }
 
+// RouteSnap carries routing context for execution-time decisions.
+// LastNode and procedure hint slices use routing-graph vertex ids: capability::tool (see routing_graph.NodeID).
 type RouteSnap struct {
-	LastCap        string
-	LastOut        int
-	UserInput      string
-	ProcedurePrior []string
-	Preferred      []string
-	RouteType      RouteType
-	GraphPathMode  GraphPathMode
+	LastNode                string    `json:"last_node,omitempty"`
+	LastOut                 int       `json:"last_out,omitempty"`
+	UserInput               string    `json:"user_input,omitempty"`
+	ProcedurePriorNodes     []string  `json:"procedure_prior_nodes,omitempty"`
+	ProcedurePreferredNodes []string  `json:"procedure_preferred_nodes,omitempty"`
+	RouteType               RouteType `json:"route_type"`
+	Confidence              float64   `json:"confidence"`
 }
 
 // Task 是单次用户消息触发的、贯穿 Planner → 执行 → 评判 的可变状态，随 Ev* 处理链读写并持久化。
@@ -109,26 +89,20 @@ type Task struct {
 
 	Plan *Plan `json:"plan,omitempty"`
 
-	// --- EvUserInput（Planner）：路由与技能先验；之后 PlanExec（RouteSnap）与 StepCritic 读取 ---
-	RoutePolicy              *RoutePolicyDecision `json:"route_policy,omitempty"`    // mode/confidence/reason；RouteSnap 取 Mode
-	GraphPathMode            GraphPathMode        `json:"graph_path_mode,omitempty"` // greedy vs global；见 GraphPathMode
-	ProcedurePriorCaps       []string             `json:"procedure_prior_caps,omitempty"`
-	ProcedurePreferredPath   []string             `json:"procedure_preferred_path,omitempty"`
-	ActiveProcedureName      string               `json:"active_procedure_name,omitempty"`       // EvTurnFinalized 学习归因 RecordTurn
-	ActiveProcedureVariantID string               `json:"active_procedure_variant_id,omitempty"` // 同上
+	// --- EvUserInput（Planner）：路由快照与技能先验；之后 PlanExec（RouteSnap）与 StepCritic 读取 ---
+	RouteSnap *RouteSnap `json:"route_snap,omitempty"`
+	ActiveProcedureName      string   `json:"active_procedure_name,omitempty"`       // EvTurnFinalized 学习归因 RecordTurn
+	ActiveProcedureVariantID string   `json:"active_procedure_variant_id,omitempty"` // 同上
 
-	// --- EvPlanProgressed / EvStepCapabilityRetry（PlanExec）：当前步、待执行工具 ---
-	StepID      string `json:"step_id,omitempty"`
-	PendingTool string `json:"pending_tool,omitempty"`
+	// --- EvPlanProgressed（PlanExec）：当前推进的 plan step id；capability/tool 以 Plan 中该步为准 ---
+	StepID string `json:"step_id,omitempty"`
 
 	// --- EvObservationReady（StepCritic）：工具观测后的重试/换能力决策；Planner 每轮开始会清空其中多数 ---
-	// Trace：StepCritic 追加；PlanExec 在批量步进时也可能追加。LastCapability/LastOutcome：StepCritic 与 PlanExec 均会更新。
+	// Trace：StepCritic 追加；PlanExec 在批量步进时也可能追加。路由位置写入 RouteSnap.LastNode/LastOut。
 	Trace               []StepTrace    `json:"trace,omitempty"`
 	ToolFailCount       map[string]int `json:"tool_fail_count,omitempty"`
 	CapabilityFailCount map[string]int `json:"capability_fail_count,omitempty"` // key: CapabilityFailCountKey(step, cap)
 	LastStepDecision    *Decision      `json:"last_step_decision,omitempty"`
-	LastCapability      string         `json:"last_capability"`
-	LastOutcome         int            `json:"last_outcome"`
 
 	// --- EvTrajectoryCheck（TrajectoryCritic）：合成对用户回复、轨迹打分；失败且允许时可能再次入队 EvUserInput（AutoReplan）---
 	Reply             string  `json:"reply"`
@@ -141,30 +115,6 @@ type Task struct {
 	TransitionPath []TransitionStep `json:"transition_path,omitempty"`
 }
 
-// RouteSnap 供执行层解析能力路径使用；要求 RoutePolicy 已由 Planner 写入（与 Plan 同时存在）。
-func (t *Task) RouteSnap() (RouteSnap, error) {
-	if t == nil {
-		return RouteSnap{}, fmt.Errorf("ports: RouteSnap: nil task")
-	}
-	if t.RoutePolicy == nil {
-		return RouteSnap{}, fmt.Errorf("ports: RouteSnap: nil RoutePolicy (expected after successful planning)")
-	}
-	gpm := t.GraphPathMode
-	if gpm == "" {
-		gpm = GraphPathGreedy
-	}
-	return RouteSnap{
-		LastCap:        t.LastCapability,
-		LastOut:        t.LastOutcome,
-		UserInput:      t.UserInput.Text,
-		ProcedurePrior: append([]string(nil), t.ProcedurePriorCaps...),
-		Preferred:      append([]string(nil), t.ProcedurePreferredPath...),
-		RouteType:      t.RoutePolicy.Type,
-		GraphPathMode:  gpm,
-	}, nil
-}
-
-const IngressHTTP = "http"
 const IngressTelegram = "telegram"
 
 // NewTaskID returns a random UUID v4 string for Task.ID (storage primary key).

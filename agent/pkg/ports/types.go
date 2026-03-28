@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"encoding/json"
 	"fmt"
 )
 
@@ -17,11 +18,22 @@ func (res ToolResult) Observation() Observation {
 	if !res.OK {
 		return Observation{Summary: "tool failed", Err: fmt.Errorf("not ok")}
 	}
-	s := fmt.Sprint(res.Output)
-	if len(s) > 500 {
-		s = s[:500] + "…"
+	var summary string
+	if b, err := json.Marshal(res.Output); err == nil {
+		summary = string(b)
+		const maxSummaryRunes = 12000
+		if len([]rune(summary)) > maxSummaryRunes {
+			r := []rune(summary)
+			summary = string(r[:maxSummaryRunes]) + "…"
+		}
+	} else {
+		s := fmt.Sprint(res.Output)
+		if len(s) > 500 {
+			s = s[:500] + "…"
+		}
+		summary = s
 	}
-	return Observation{Summary: s, Structured: res.Output}
+	return Observation{Summary: summary, Structured: res.Output}
 }
 
 type RouteMode string

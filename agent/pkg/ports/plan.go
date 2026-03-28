@@ -6,6 +6,18 @@ type Plan struct {
 	Steps []PlanStep `json:"steps"`
 }
 
+func (p *Plan) FindStep(stepID string) *PlanStep {
+	if p == nil {
+		return nil
+	}
+	for i := range p.Steps {
+		if p.Steps[i].ID == stepID {
+			return &p.Steps[i]
+		}
+	}
+	return nil
+}
+
 type PlanStep struct {
 	ID         string   `json:"id"`
 	Goal       string   `json:"goal"`

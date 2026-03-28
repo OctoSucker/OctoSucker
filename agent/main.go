@@ -49,7 +49,7 @@ func main() {
 
 	if a.Telegram != nil {
 		go func() {
-			err := a.Telegram.RunPoll(ctx, func(ctx context.Context, chatID int64, text string) (string, error) {
+			err := a.Telegram.RunPoll(ctx, func(ctx context.Context, chatID int64, text string) ([]string, error) {
 				return a.RunInput(ctx, chatID, text)
 			})
 			if err != nil && !errors.Is(err, context.Canceled) {

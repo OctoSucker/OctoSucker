@@ -1,0 +1,22 @@
+{
+  "name": "opencli",
+  "description": "Make any website or Electron App your CLI. Reuse Chrome login, zero risk, AI-powered discovery.",
+  "cautions": "AI Agent 必读：创建或修改任何适配器之前，必须先阅读 CLI-EXPLORER.md！本文件仅提供命令参考和简化模板，不足以正确开发适配器。遵守3条收口规则：主参数优先 positional arg；adapter 失败优先抛 CliError 子类；新增命令需同步更新文档。",
+  "source_path": "/Users/zecrey/Desktop/OctoSucker/OctoSucker/agent/workspace/skills/SKILL.md",
+  "capabilities": [
+    {
+      "capability": "exec",
+      "tools": [
+        {
+          "name": "opencli",
+          "description": "Invoke OpenCLI commands to interact with websites, Electron apps, and public APIs via CLI.",
+          "usage": "Run browser-based or public API commands using predefined adapters (e.g., bilibili, twitter, hackernews) or management/AI agent workflows (e.g., record, explore, synthesize).",
+          "input_schema": {
+            "args": "array",
+            "command": "string"
+          }
+        }
+      ]
+    }
+  ]
+}

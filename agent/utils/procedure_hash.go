@@ -17,6 +17,13 @@ func HashPipeJoinedCapabilities(caps []string) string {
 	return hex.EncodeToString(h[:])[:8]
 }
 
+// HashPipeJoinedRouteNodes returns first 8 hex chars of SHA256(nodes joined by "|").
+// Each node must be capability::tool (routing graph vertex id).
+func HashPipeJoinedRouteNodes(nodes []string) string {
+	h := sha256.Sum256([]byte(strings.Join(nodes, "|")))
+	return hex.EncodeToString(h[:])[:8]
+}
+
 // PlanSemanticFingerprint is a stable hash over plan semantics (steps + deps + arguments); 12 hex chars.
 func PlanSemanticFingerprint(p *ports.Plan) string {
 	if p == nil || len(p.Steps) == 0 {
