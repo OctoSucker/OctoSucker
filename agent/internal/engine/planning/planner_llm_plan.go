@@ -74,7 +74,7 @@ For exec, capability is always exec and tool is always run_command (see [capabil
 	}
 	if sa := strings.TrimSpace(skillsbuiltin.FormatPromptAppendix(bundle)); sa != "" {
 		system += "\n\n" + sa
-		system += "\n\nWhen a skill matches the user intent, follow that skill's cautions and tool usage guidance while keeping plan steps executable with listed capabilities/tools. For capability=skills, the JSON \"tool\" field must match a tools-appendix line exactly (e.g. list_skills, reload_skills, get_skill, or a bound name like install-skill__run_command)—never the skill display title alone (e.g. not \"install-skill\")."
+		system += "\n\nWhen a skill matches the user intent, call capability=skills tools (list_skills, read_skill with pagination via offset_runes/next_offset_runes, reload_skills, get_skills_planner_appendix, get_skills_root_dir) to load markdown; then follow that text when choosing exec or other capabilities. The JSON \"tool\" field must match the tools appendix exactly (e.g. read_skill)—not the skill file stem (e.g. not \"opencli\")."
 	}
 
 	system += "\n\nWhen using exec for workspace files, set arguments.work_dir relative to workspace root and keep paths in arguments.args relative to work_dir; do not use host absolute paths like /Users/... or C:\\... in args."

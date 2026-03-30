@@ -9,6 +9,7 @@ import (
 	"github.com/OctoSucker/agent/internal/config"
 	"github.com/OctoSucker/agent/pkg/ports"
 	catalogbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/catalog"
+	cronjobbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/cronjob"
 	execbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/exec"
 	skillsbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/skills"
 	telegrambuiltin "github.com/OctoSucker/agent/repo/capability/builtin/telegram"
@@ -61,6 +62,15 @@ func NewCapabilityRegistry(
 		return nil, fmt.Errorf("capability: catalog runner is required")
 	}
 	r.Runners[catalogbuiltin.CapabilityName] = catalogRunner
+
+	if len(execCfg.WorkspaceDirs) == 0 {
+		return nil, fmt.Errorf("capability: exec.workspace_dirs is required for cronjob builtin")
+	}
+	cronjobRunner, err := cronjobbuiltin.NewRunner(execCfg.WorkspaceDirs[0])
+	if err != nil {
+		return nil, fmt.Errorf("capability: cronjob builtin: %w", err)
+	}
+	r.Runners[cronjobbuiltin.CapabilityName] = cronjobRunner
 
 	// register mcp capabilities
 	for _, ep := range mcpEndpoints {
@@ -170,29 +180,6 @@ func (r *CapabilityRegistry) PlannerToolAppendix() string {
 				b.WriteString(" params JSON Schema: ")
 				b.Write(raw)
 			}
-			b.WriteByte('\n')
-		}
-	}
-	if r.skillsRunner != nil {
-		bound, err := r.skillsRunner.BoundMcpTools()
-		if err != nil {
-			return ""
-		}
-		for _, t := range bound {
-			if t == nil || t.Name == "" {
-				continue
-			}
-			b.WriteString("- ")
-			b.WriteString(t.Name)
-			b.WriteString(" [capability=")
-			b.WriteString(skillsbuiltin.CapabilityName)
-			b.WriteString("]")
-			raw, err := json.Marshal(t.InputSchema)
-			if err != nil {
-				return ""
-			}
-			b.WriteString(" params JSON Schema: ")
-			b.Write(raw)
 			b.WriteByte('\n')
 		}
 	}

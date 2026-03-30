@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/OctoSucker/agent/internal/config"
 	"github.com/OctoSucker/agent/internal/engine"
@@ -15,6 +17,7 @@ type App struct {
 	Dispatcher *engine.Dispatcher
 	Telegram   *telegram.Ingress
 	data       *model.AgentDB
+	turnMu     sync.Mutex
 }
 
 func NewFromWorkspace(ctx context.Context, workspaceRoot string, cfg *config.Workspace) (*App, error) {
@@ -33,17 +36,21 @@ func NewFromWorkspace(ctx context.Context, workspaceRoot string, cfg *config.Wor
 		}
 		return nil, fmt.Errorf("octoplus: dispatcher: %w", err)
 	}
-	telegram, err := telegram.NewIngress(cfg.Telegram.BotToken, cfg.Telegram.DefaultChatID, cfg.Telegram.AllowedChatIDs)
-	if err != nil {
-		if cerr := data.Close(); cerr != nil {
-			err = errors.Join(err, fmt.Errorf("close data db: %w", cerr))
+	var tg *telegram.Ingress
+	if strings.TrimSpace(cfg.Telegram.BotToken) != "" {
+		var errTg error
+		tg, errTg = telegram.NewIngress(cfg.Telegram.BotToken, cfg.Telegram.DefaultChatID, cfg.Telegram.AllowedChatIDs)
+		if errTg != nil {
+			if cerr := data.Close(); cerr != nil {
+				errTg = errors.Join(errTg, fmt.Errorf("close data db: %w", cerr))
+			}
+			return nil, fmt.Errorf("octoplus: telegram ingress: %w", errTg)
 		}
-		return nil, fmt.Errorf("octoplus: telegram ingress: %w", err)
 	}
 	a := &App{
 		Dispatcher: d,
 		data:       data,
-		Telegram:   telegram,
+		Telegram:   tg,
 	}
 
 	return a, nil

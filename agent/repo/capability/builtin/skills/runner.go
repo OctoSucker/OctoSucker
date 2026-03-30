@@ -2,15 +2,13 @@ package skillsbuiltin
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
-	"github.com/OctoSucker/agent/model"
-	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -20,32 +18,25 @@ const (
 	ToolGetRootDir         = "get_skills_root_dir"
 	ToolReloadSkills       = "reload_skills"
 	ToolListSkills         = "list_skills"
-	ToolGetSkill           = "get_skill"
+	ToolReadSkill          = "read_skill"
 	ToolGetPlannerAppendix = "get_skills_planner_appendix"
+
+	defaultReadLimitRunes = 8000
+	maxReadLimitRunes     = 50000
 )
 
 type Runner struct {
 	dir    string
-	db     *model.AgentDB
-	byName map[string]Skill
-	llm    *llmclient.OpenAI
+	byName map[string]SkillMeta
 }
 
-// NewRunner loads skills from workspace SQLite, merges markdown under dir (new files parsed and upserted), and returns the skills capability runner.
-func NewRunner(ctx context.Context, db *model.AgentDB, dir string, llm *llmclient.OpenAI) (*Runner, error) {
-	if db == nil {
-		return nil, fmt.Errorf("skills builtin: agent db is required")
-	}
+// NewRunner scans dir for *.md skill files and returns the skills capability runner.
+func NewRunner(dir string) (*Runner, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("skills builtin: directory is required")
 	}
-	r := &Runner{
-		dir:    dir,
-		db:     db,
-		byName: make(map[string]Skill),
-		llm:    llm,
-	}
-	if err := r.Reload(ctx, llm); err != nil {
+	r := &Runner{dir: dir}
+	if err := r.Reload(); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -60,17 +51,14 @@ func (r *Runner) RootDir() string {
 	return r.dir
 }
 
-func (r *Runner) Reload(ctx context.Context, llm *llmclient.OpenAI) error {
+func (r *Runner) Reload() error {
 	if r == nil {
 		return fmt.Errorf("skills builtin: runner is nil")
-	}
-	if r.db == nil {
-		return fmt.Errorf("skills builtin: agent db is required")
 	}
 	if r.dir == "" {
 		return fmt.Errorf("skills builtin: directory is required")
 	}
-	byName, err := r.syncFromDir(ctx, llm)
+	byName, err := scanSkillDir(r.dir)
 	if err != nil {
 		return err
 	}
@@ -78,93 +66,37 @@ func (r *Runner) Reload(ctx context.Context, llm *llmclient.OpenAI) error {
 	return nil
 }
 
-// syncFromDir loads every skill row from SQLite into memory, then scans skills root for *.md.
-// For each markdown file whose source_file is already stored, the cached JSON payload is used (no LLM).
-// For a new file (basename e.g. foo.md with no row for that source_file), the file is parsed with the LLM;
-// the parsed skill name must equal the file stem (foo). New or updated rows are written with SkillUpsert.
-func (r *Runner) syncFromDir(ctx context.Context, llm *llmclient.OpenAI) (map[string]Skill, error) {
-	rows, err := r.db.SkillsSelectAllRows()
+func scanSkillDir(dir string) (map[string]SkillMeta, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("skills builtin: load skills from sqlite: %w", err)
+		return nil, fmt.Errorf("skills builtin: read dir %q: %w", dir, err)
 	}
-
-	byName := make(map[string]Skill, len(rows))
-	bySource := make(map[string]Skill, len(rows))
-	for _, row := range rows {
-		sk, derr := decodeSkillJSON([]byte(row.Payload))
-		if derr != nil {
-			return nil, fmt.Errorf("skills builtin: decode stored skill %q: %w", row.Name, derr)
-		}
-		if verr := validateSkill(sk); verr != nil {
-			return nil, fmt.Errorf("skills builtin: stored skill %q: %w", row.Name, verr)
-		}
-		fullPath := filepath.Join(r.dir, filepath.FromSlash(row.SourceFile))
-		sk.SourcePath = fullPath
-		byName[sk.Name] = sk
-		bySource[row.SourceFile] = sk
-	}
-
-	entries, err := os.ReadDir(r.dir)
-	if err != nil {
-		return nil, fmt.Errorf("skills builtin: read dir %q: %w", r.dir, err)
-	}
-
-	mdFiles := make([]string, 0, len(entries))
+	byName := make(map[string]SkillMeta)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		if strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
-			mdFiles = append(mdFiles, filepath.Join(r.dir, entry.Name()))
-		}
-	}
-	sort.Strings(mdFiles)
-
-	for _, fullPath := range mdFiles {
-		base := filepath.Base(fullPath)
-		rel := filepath.ToSlash(base)
-		stem := strings.TrimSuffix(base, filepath.Ext(base))
-
-		if existing, ok := bySource[rel]; ok {
-			existing.SourcePath = fullPath
-			byName[existing.Name] = existing
-			bySource[rel] = existing
+		if !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
 			continue
 		}
-
-		if llm == nil {
-			return nil, fmt.Errorf("skills builtin: llm is required to parse new skill markdown %q", fullPath)
+		base := filepath.Base(entry.Name())
+		stem := strings.TrimSuffix(base, filepath.Ext(base))
+		fullPath := filepath.Join(dir, base)
+		st, statErr := os.Stat(fullPath)
+		if statErr != nil {
+			return nil, fmt.Errorf("skills builtin: stat %q: %w", fullPath, statErr)
 		}
-		raw, rerr := os.ReadFile(fullPath)
-		if rerr != nil {
-			return nil, fmt.Errorf("skills builtin: read skill file %q: %w", fullPath, rerr)
+		byName[stem] = SkillMeta{
+			Name:       stem,
+			SourceFile: filepath.ToSlash(base),
+			SourcePath: fullPath,
+			ByteSize:   st.Size(),
 		}
-		sk, perr := parseSkillMarkdown(ctx, llm, fullPath, string(raw))
-		if perr != nil {
-			return nil, fmt.Errorf("skills builtin: parse skill file %q: %w", fullPath, perr)
-		}
-		if sk.Name != stem {
-			return nil, fmt.Errorf("skills builtin: skill name %q must match markdown basename %q", sk.Name, stem)
-		}
-		payload, merr := json.Marshal(sk)
-		if merr != nil {
-			return nil, fmt.Errorf("skills builtin: marshal skill %q: %w", sk.Name, merr)
-		}
-		if uerr := r.db.SkillUpsert(model.SkillPersistRow{
-			Name:       sk.Name,
-			SourceFile: rel,
-			Payload:    string(payload),
-		}); uerr != nil {
-			return nil, fmt.Errorf("skills builtin: sqlite upsert %q: %w", sk.Name, uerr)
-		}
-		bySource[rel] = sk
-		byName[sk.Name] = sk
 	}
-
 	return byName, nil
 }
 
-func (r *Runner) allSkills() []Skill {
+func (r *Runner) allSkills() []SkillMeta {
 	if r == nil {
 		return nil
 	}
@@ -173,22 +105,21 @@ func (r *Runner) allSkills() []Skill {
 		names = append(names, k)
 	}
 	sort.Strings(names)
-	out := make([]Skill, 0, len(names))
+	out := make([]SkillMeta, 0, len(names))
 	for _, name := range names {
 		out = append(out, r.byName[name])
 	}
 	return out
 }
 
-func (r *Runner) getSkill(name string) (Skill, bool) {
+func (r *Runner) getSkillMeta(name string) (SkillMeta, bool) {
 	if r == nil {
-		return Skill{}, false
+		return SkillMeta{}, false
 	}
 	sk, ok := r.byName[name]
 	return sk, ok
 }
 
-// PlannerBundle returns structured skill docs for planner prompts and MCP tools.
 func (r *Runner) PlannerBundle() PromptBundle {
 	if r == nil {
 		return PromptBundle{}
@@ -200,91 +131,6 @@ func (r *Runner) plannerAppendix() string {
 	return FormatPromptAppendix(r.PlannerBundle())
 }
 
-type boundSkillTool struct {
-	MCPName    string
-	Skill      Skill
-	Capability string
-	Tool       SkillTool
-}
-
-func mcpSlug(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "unnamed"
-	}
-	var b strings.Builder
-	lastUnderscore := false
-	for _, r := range s {
-		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_'
-		if ok {
-			b.WriteRune(r)
-			lastUnderscore = false
-			continue
-		}
-		if !lastUnderscore {
-			b.WriteByte('_')
-			lastUnderscore = true
-		}
-	}
-	out := strings.Trim(b.String(), "_")
-	if out == "" {
-		return "x"
-	}
-	return out
-}
-
-// BoundMcpTools returns planner-invokable tools derived from loaded skills (skillslug__toolslug).
-// They are not included in ToolList and must be listed separately in the planner appendix.
-func (r *Runner) BoundMcpTools() ([]*mcp.Tool, error) {
-	bound := r.boundSkillTools()
-	out := make([]*mcp.Tool, 0, len(bound))
-	for _, e := range bound {
-		t, err := r.Tool(e.MCPName)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, nil
-}
-
-func (r *Runner) boundSkillTools() []boundSkillTool {
-	all := r.allSkills()
-	var out []boundSkillTool
-	seen := make(map[string]struct{})
-	for _, sk := range all {
-		for _, c := range sk.Capabilities {
-			for _, t := range c.Tools {
-				if strings.TrimSpace(t.Name) == "" {
-					continue
-				}
-				base := mcpSlug(sk.Name) + "__" + mcpSlug(t.Name)
-				var name string
-				for suffix := 0; ; suffix++ {
-					if suffix == 0 {
-						name = base
-					} else {
-						name = fmt.Sprintf("%s__%d", base, suffix)
-					}
-					if _, dup := seen[name]; dup {
-						continue
-					}
-					seen[name] = struct{}{}
-					break
-				}
-				out = append(out, boundSkillTool{
-					MCPName:    name,
-					Skill:      sk,
-					Capability: strings.TrimSpace(c.Capability),
-					Tool:       t,
-				})
-			}
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].MCPName < out[j].MCPName })
-	return out
-}
-
 func emptyObjectSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
@@ -293,56 +139,56 @@ func emptyObjectSchema() map[string]any {
 	}
 }
 
-func inputSchemaForSkillTool(t SkillTool) (map[string]any, error) {
-	if len(t.InputSchema) == 0 {
-		return emptyObjectSchema(), nil
+func readSkillInputSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Skill name (markdown stem) as returned by list_skills",
+			},
+			"offset_runes": map[string]any{
+				"type":        "integer",
+				"description": "0-based rune offset into the file; omit or 0 for start. Use next_offset_runes from the previous read_skill until eof.",
+				"minimum":     0,
+			},
+			"limit_runes": map[string]any{
+				"type":        "integer",
+				"description": fmt.Sprintf("Max runes to return (default %d, max %d)", defaultReadLimitRunes, maxReadLimitRunes),
+				"minimum":     1,
+				"maximum":     maxReadLimitRunes,
+			},
+		},
+		"required":             []string{"name"},
+		"additionalProperties": false,
 	}
-	raw, err := json.Marshal(t.InputSchema)
-	if err != nil {
-		return nil, fmt.Errorf("skills builtin: marshal skill tool input_schema: %w", err)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, fmt.Errorf("skills builtin: skill tool input_schema: %w", err)
-	}
-	return m, nil
 }
 
 func (r *Runner) builtinTools() []*mcp.Tool {
 	return []*mcp.Tool{
 		{
 			Name:        ToolGetRootDir,
-			Description: "Get local skills root directory (markdown sources scanned on reload; canonical copy is workspace SQLite)",
+			Description: "Get local skills root directory (top-level *.md files are skills)",
 			InputSchema: emptyObjectSchema(),
 		},
 		{
 			Name:        ToolListSkills,
-			Description: "List loaded skills with capabilities and nested tools (name, description, usage, input_schema per tool)",
+			Description: "List markdown skill files (name, path, size). Use read_skill to load content in pages.",
 			InputSchema: emptyObjectSchema(),
 		},
 		{
-			Name:        ToolGetSkill,
-			Description: "Load one skill record by name (metadata and capabilities with nested tools)",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"name": map[string]any{
-						"type":        "string",
-						"description": "Skill name as returned by list_skills",
-					},
-				},
-				"required":             []string{"name"},
-				"additionalProperties": false,
-			},
+			Name:        ToolReadSkill,
+			Description: "Read one skill markdown file as UTF-8 text; paginate with offset_runes / limit_runes using next_offset_runes until eof.",
+			InputSchema: readSkillInputSchema(),
 		},
 		{
 			Name:        ToolGetPlannerAppendix,
-			Description: "Return the full skills planner appendix text (markdown skill docs summary)",
+			Description: "Return the skills planner appendix (index of skill names and files only)",
 			InputSchema: emptyObjectSchema(),
 		},
 		{
 			Name:        ToolReloadSkills,
-			Description: "Reload from workspace SQLite, rescan *.md under skills root; new markdown files are parsed and upserted (cached rows reused when source_file matches)",
+			Description: "Rescan the skills root for *.md files (picks up adds/removes/renames)",
 			InputSchema: emptyObjectSchema(),
 		},
 	}
@@ -357,11 +203,6 @@ func (r *Runner) HasTool(name string) bool {
 			return true
 		}
 	}
-	for _, e := range r.boundSkillTools() {
-		if e.MCPName == name {
-			return true
-		}
-	}
 	return false
 }
 
@@ -371,42 +212,11 @@ func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
 			return t, nil
 		}
 	}
-	for _, e := range r.boundSkillTools() {
-		if e.MCPName != tool {
-			continue
-		}
-		schema, err := inputSchemaForSkillTool(e.Tool)
-		if err != nil {
-			return nil, err
-		}
-		desc := strings.TrimSpace(e.Tool.Description)
-		if desc == "" {
-			desc = "Skill tool " + e.Tool.Name
-		}
-		desc = fmt.Sprintf("[%s] %s", e.Skill.Name, desc)
-		if u := strings.TrimSpace(e.Tool.Usage); u != "" {
-			desc += " | usage: " + u
-		}
-		return &mcp.Tool{
-			Name:        e.MCPName,
-			Description: desc,
-			InputSchema: schema,
-		}, nil
-	}
 	return nil, fmt.Errorf("skills builtin: unknown tool %q", tool)
 }
 
 func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
 	return r.builtinTools(), nil
-}
-
-func (r *Runner) findBoundTool(mcpName string) (boundSkillTool, bool) {
-	for _, e := range r.boundSkillTools() {
-		if e.MCPName == mcpName {
-			return e, true
-		}
-	}
-	return boundSkillTool{}, false
 }
 
 func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
@@ -420,34 +230,25 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 		}, nil
 	case ToolListSkills:
 		all := r.allSkills()
-		skills := make([]Skill, len(all))
-		for i, sk := range all {
-			skills[i] = sk
-			if skills[i].Capabilities == nil {
-				skills[i].Capabilities = []SkillCapability{}
-			}
+		list := make([]map[string]any, 0, len(all))
+		for _, sk := range all {
+			list = append(list, map[string]any{
+				"name":        sk.Name,
+				"source_file": sk.SourceFile,
+				"source_path": sk.SourcePath,
+				"byte_size":   sk.ByteSize,
+			})
 		}
-		return ports.ToolResult{OK: true, Output: map[string]any{"skills": skills}}, nil
-	case ToolGetSkill:
-		if inv.Arguments == nil {
-			return ports.ToolResult{}, fmt.Errorf("skills builtin: get_skill requires arguments")
-		}
-		rawName, ok := inv.Arguments["name"].(string)
-		if !ok || strings.TrimSpace(rawName) == "" {
-			return ports.ToolResult{}, fmt.Errorf("skills builtin: get_skill argument \"name\" must be non-empty string")
-		}
-		sk, ok := r.getSkill(strings.TrimSpace(rawName))
-		if !ok {
-			return ports.ToolResult{}, fmt.Errorf("skills builtin: no skill named %q", rawName)
-		}
-		return ports.ToolResult{OK: true, Output: sk}, nil
+		return ports.ToolResult{OK: true, Output: map[string]any{"skills": list}}, nil
+	case ToolReadSkill:
+		return r.invokeReadSkill(inv.Arguments)
 	case ToolGetPlannerAppendix:
 		return ports.ToolResult{
 			OK:     true,
 			Output: map[string]any{"appendix": r.plannerAppendix()},
 		}, nil
 	case ToolReloadSkills:
-		if err := r.Reload(ctx, r.llm); err != nil {
+		if err := r.Reload(); err != nil {
 			return ports.ToolResult{}, err
 		}
 		all := r.allSkills()
@@ -464,22 +265,91 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 			},
 		}, nil
 	default:
-		if e, ok := r.findBoundTool(inv.Tool); ok {
-			return ports.ToolResult{
-				OK: true,
-				Output: map[string]any{
-					"skill":             e.Skill.Name,
-					"skill_description": e.Skill.Description,
-					"cautions":          e.Skill.Cautions,
-					"source_path":       e.Skill.SourcePath,
-					"capability":        e.Capability,
-					"tool":              e.Tool.Name,
-					"tool_description":  e.Tool.Description,
-					"usage":             e.Tool.Usage,
-					"arguments":         inv.Arguments,
-				},
-			}, nil
-		}
 		return ports.ToolResult{}, fmt.Errorf("skills builtin: unknown tool %q", inv.Tool)
+	}
+}
+
+func (r *Runner) invokeReadSkill(args map[string]any) (ports.ToolResult, error) {
+	if args == nil {
+		return ports.ToolResult{}, fmt.Errorf("skills builtin: read_skill requires arguments")
+	}
+	rawName, ok := args["name"].(string)
+	if !ok || strings.TrimSpace(rawName) == "" {
+		return ports.ToolResult{}, fmt.Errorf("skills builtin: read_skill argument \"name\" must be non-empty string")
+	}
+	name := strings.TrimSpace(rawName)
+	meta, ok := r.getSkillMeta(name)
+	if !ok {
+		return ports.ToolResult{}, fmt.Errorf("skills builtin: no skill named %q", name)
+	}
+	offset, err := intFromArgs(args, "offset_runes", 0)
+	if err != nil {
+		return ports.ToolResult{}, fmt.Errorf("skills builtin: read_skill offset_runes: %w", err)
+	}
+	if offset < 0 {
+		return ports.ToolResult{}, fmt.Errorf("skills builtin: read_skill offset_runes must be >= 0")
+	}
+	limit, err := intFromArgs(args, "limit_runes", defaultReadLimitRunes)
+	if err != nil {
+		return ports.ToolResult{}, fmt.Errorf("skills builtin: read_skill limit_runes: %w", err)
+	}
+	if limit < 1 {
+		limit = defaultReadLimitRunes
+	}
+	if limit > maxReadLimitRunes {
+		limit = maxReadLimitRunes
+	}
+
+	raw, err := os.ReadFile(meta.SourcePath)
+	if err != nil {
+		return ports.ToolResult{}, fmt.Errorf("skills builtin: read %q: %w", meta.SourcePath, err)
+	}
+	if !utf8.Valid(raw) {
+		return ports.ToolResult{}, fmt.Errorf("skills builtin: %q is not valid UTF-8", meta.SourcePath)
+	}
+	rs := []rune(string(raw))
+	total := len(rs)
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	chunk := string(rs[offset:end])
+	next := end
+	eof := next >= total
+
+	return ports.ToolResult{
+		OK: true,
+		Output: map[string]any{
+			"name":               meta.Name,
+			"source_path":        meta.SourcePath,
+			"source_file":        meta.SourceFile,
+			"text":               chunk,
+			"offset_runes":       offset,
+			"limit_runes":        limit,
+			"total_runes":        total,
+			"next_offset_runes":  next,
+			"eof":                eof,
+			"returned_rune_span": end - offset,
+		},
+	}, nil
+}
+
+func intFromArgs(m map[string]any, key string, defaultVal int) (int, error) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return defaultVal, nil
+	}
+	switch x := v.(type) {
+	case float64:
+		return int(x), nil
+	case int:
+		return x, nil
+	case int64:
+		return int(x), nil
+	default:
+		return 0, fmt.Errorf("%q must be a number", key)
 	}
 }

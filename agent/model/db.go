@@ -90,11 +90,6 @@ func (a *AgentDB) migrate() error {
 			text TEXT NOT NULL,
 			embedding BLOB
 		)`, TableRecallChunks),
-		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-			name TEXT PRIMARY KEY NOT NULL,
-			source_file TEXT NOT NULL UNIQUE,
-			payload TEXT NOT NULL
-		)`, TableSkills),
 	}
 	for _, q := range stmts {
 		if _, err := a.DB.Exec(q); err != nil {

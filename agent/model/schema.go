@@ -7,5 +7,4 @@ const (
 	TableRoutingEdges = "routing_edges"
 	TableRoutingMeta  = "routing_meta"
 	TableRecallChunks = "recall_chunks"
-	TableSkills       = "skills"
 )

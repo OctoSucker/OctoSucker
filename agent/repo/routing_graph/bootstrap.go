@@ -16,7 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// New loads capabilities from runners, reloads on-disk skills, resyncs registry tool lists, and builds static topology + SQLite-backed edge state.
+// New loads capabilities from runners, scans on-disk skills (*.md), resyncs registry tool lists, and builds static topology + SQLite-backed edge state.
 func New(
 	ctx context.Context,
 	mcpEndpoints []string,
@@ -26,7 +26,7 @@ func New(
 	plannerLLM *llmclient.OpenAI,
 	store *model.AgentDB,
 ) (*RoutingGraph, error) {
-	skillRunner, err := skillsbuiltin.NewRunner(ctx, store, skillsDir, plannerLLM)
+	skillRunner, err := skillsbuiltin.NewRunner(skillsDir)
 	if err != nil {
 		return nil, fmt.Errorf("routinggraph: skills runner: %w", err)
 	}

@@ -1,14 +1,14 @@
 package skillsbuiltin
 
 import (
-	"encoding/json"
+	"strconv"
 	"strings"
 )
 
-// PromptBundle is the skills slice plus filesystem root for planner prompts (Skills use the same shape as stored records; see Skill in store.go).
+// PromptBundle lists discovered skill files for planner prompts (content is loaded via read_skill).
 type PromptBundle struct {
 	RootDir string
-	Skills  []Skill
+	Skills  []SkillMeta
 }
 
 func FormatPromptAppendix(b PromptBundle) string {
@@ -16,56 +16,20 @@ func FormatPromptAppendix(b PromptBundle) string {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("Skills (from local markdown docs):\n")
+	sb.WriteString("Skills (markdown under skills root; load bodies with capability=skills tool read_skill using pagination):\n")
 	if b.RootDir != "" {
 		sb.WriteString("Skills root directory: ")
 		sb.WriteString(b.RootDir)
 		sb.WriteByte('\n')
 	}
 	for _, sk := range b.Skills {
-		sb.WriteString("- skill: ")
+		sb.WriteString("- name: ")
 		sb.WriteString(sk.Name)
-		if sk.Description != "" {
-			sb.WriteString(" | ")
-			sb.WriteString(sk.Description)
-		}
-		if sk.Cautions != "" {
-			sb.WriteString(" | cautions: ")
-			sb.WriteString(sk.Cautions)
-		}
-		sb.WriteString(" | source: ")
-		sb.WriteString(sk.SourcePath)
+		sb.WriteString(" | file: ")
+		sb.WriteString(sk.SourceFile)
+		sb.WriteString(" | bytes: ")
+		sb.WriteString(strconv.FormatInt(sk.ByteSize, 10))
 		sb.WriteByte('\n')
-		for _, c := range sk.Capabilities {
-			sb.WriteString("  - capability: ")
-			if strings.TrimSpace(c.Capability) != "" {
-				sb.WriteString(c.Capability)
-			} else {
-				sb.WriteString("(unset)")
-			}
-			sb.WriteByte('\n')
-			for _, t := range c.Tools {
-				sb.WriteString("    - tool: ")
-				sb.WriteString(t.Name)
-				if t.Description != "" {
-					sb.WriteString(" | ")
-					sb.WriteString(t.Description)
-				}
-				if t.Usage != "" {
-					sb.WriteString(" | usage: ")
-					sb.WriteString(t.Usage)
-				}
-				if t.InputSchema != nil {
-					raw, err := json.Marshal(t.InputSchema)
-					if err != nil {
-						return ""
-					}
-					sb.WriteString(" | input_schema: ")
-					sb.Write(raw)
-				}
-				sb.WriteByte('\n')
-			}
-		}
 	}
 	return sb.String()
 }
