@@ -37,6 +37,14 @@ workspace/*.json
 # .idea/
 # .vscode/
 
+.DS_Store
+
+# Local workspace DB and logs (never commit)
+agent/workspace/data/*.sqlite
+agent/workspace/data/*.sqlite-shm
+agent/workspace/data/*.sqlite-wal
+agent/workspace/logs/
+
 workspace/cron.db
 workspace/memory
 workspace/remember.db
