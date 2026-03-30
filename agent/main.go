@@ -11,7 +11,7 @@ import (
 	"syscall"
 
 	"github.com/OctoSucker/agent/internal/config"
-	"github.com/OctoSucker/agent/internal/runtime/app"
+	"github.com/OctoSucker/agent/internal/app"
 )
 
 func init() {

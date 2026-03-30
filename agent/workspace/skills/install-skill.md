@@ -1,4 +1,4 @@
-# Skill: Install Skill From URL
+# Skill: install-skill
 
 ## Goal
 Install a skill markdown file from a URL and load it.

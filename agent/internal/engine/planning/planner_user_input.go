@@ -2,103 +2,103 @@ package planning
 
 import (
 	"context"
+	"fmt"
 	"log"
-	"strings"
 
 	"github.com/OctoSucker/agent/pkg/ports"
+	"github.com/OctoSucker/agent/repo/capability/mcp"
+	"github.com/OctoSucker/agent/repo/graph"
 )
 
 const graphRouteThreshold = 0.9
-const procedureRouteThreshold = 0.9
-const keywordConfidenceThreshold = 0.92
 
 func (p *Planner) HandleUserInput(ctx context.Context, evt ports.Event) (*ports.Event, error) {
 	pl := evt.Payload.(ports.PayloadUserInput)
-	taskState, err := p.Tasks.GetOrCreate(pl.TaskID)
+	task, err := p.Tasks.GetOrCreate(pl.TaskID)
 	if err != nil {
 		return nil, err
 	}
-	keepExistingPlan := pl.AutoReplan && taskState.Plan != nil && len(taskState.Plan.Steps) > 0
-	resetTaskForUserInput(taskState, pl, !keepExistingPlan)
 
-	embHit, err := p.Procedures.MatchBestByText(ctx, pl.Text)
-	if err != nil {
-		return nil, err
-	}
-	kwHit := p.Procedures.KeywordPlanHit(pl.Text)
+	cont := pl.PlannerContinuation
+	keepExistingPlan := cont && task.Plan != nil && len(task.Plan.Steps) > 0
+	resetTaskForUserInput(task, pl, !keepExistingPlan, cont)
 
 	var buildPlan *ports.Plan
-	taskState.RouteSnap = &ports.RouteSnap{RouteType: ports.RouteTypePlanner, Confidence: 0}
-	if embHit != nil && embHit.MatchScore >= procedureRouteThreshold {
-		taskState.RouteSnap = &ports.RouteSnap{RouteType: ports.RouteTypeEmbeddingProcedure, Confidence: embHit.MatchScore}
-		buildPlan, err = p.buildPlanFromProcedure(taskState, embHit)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if kwHit != nil && kwHit.SelectedPlan() != nil && keywordConfidenceThreshold > taskState.RouteSnap.Confidence {
-		taskState.RouteSnap = &ports.RouteSnap{RouteType: ports.RouteTypeKeywordProcedure, Confidence: keywordConfidenceThreshold}
-		buildPlan, err = p.buildPlanFromProcedure(taskState, kwHit)
-		if err != nil {
-			return nil, err
-		}
-	}
-	g := p.RouteGraph.Confidence(ctx, ports.RoutingContext{IntentText: pl.Text}, "")
+
+	g := p.RouteGraph.Confidence(ctx, pl.Text, graph.Node{})
 	log.Printf("------planner: graph confidence: %f", g)
-	if g >= graphRouteThreshold && g > taskState.RouteSnap.Confidence {
-		taskState.RouteSnap = &ports.RouteSnap{RouteType: ports.RouteTypeGraphConfidence, Confidence: g}
-		buildPlan, err = p.buildGraphPlan(ctx, pl.TaskID, taskState, pl.ExcludeCapability, pl.ExcludeTool)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if taskState.RouteSnap.Confidence < 0.5 {
-		taskState.RouteSnap = &ports.RouteSnap{RouteType: ports.RouteTypeHeuristicComplexRequest, Confidence: 0.05}
-		buildPlan, err = p.buildLLMPlan(ctx, pl.TaskID, taskState)
+	if g >= graphRouteThreshold {
+		task.RouteSnap = &ports.RouteSnap{RouteType: ports.RouteTypeGraphConfidence, Confidence: g}
+		buildPlan, err = p.buildGraphPlan(ctx, pl.TaskID, task, pl.ExcludeCapability, pl.ExcludeTool)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	taskState.RouteSnap.UserInput = pl.Text
-	log.Printf("planner: build plan from %s: %+v", taskState.RouteSnap.RouteType, buildPlan)
+	if routeSnapConfidence(task.RouteSnap) < 0.5 {
+		task.RouteSnap = &ports.RouteSnap{RouteType: ports.RouteTypeHeuristicComplexRequest, Confidence: 0.05}
+		buildPlan, err = p.buildLLMPlan(ctx, pl.TaskID, task)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if buildPlan == nil || len(buildPlan.Steps) == 0 {
+		return nil, fmt.Errorf("planner: empty plan")
+	}
+	task.RouteSnap.UserInput = pl.Text
 
-	return p.finalizePlan(ctx, pl.TaskID, taskState, buildPlan)
+	for _, st := range buildPlan.Steps {
+		t, err := p.RouteGraph.Tool(st.Capability, st.Tool)
+		if err != nil {
+			return nil, fmt.Errorf("planner: step id=%v: %w", st.ID, err)
+		}
+		if err := mcp.ValidateToolArguments(st.Tool, st.Arguments, t.InputSchema); err != nil {
+			log.Printf("engine.Dispatcher: plan arguments invalid task=%s err=%v", pl.TaskID, err)
+			return nil, fmt.Errorf("planner: plan tool arguments: step id=%q capability=%q tool=%q: %w", st.ID, st.Capability, st.Tool, err)
+		}
+		if st.Status == "" {
+			st.Status = "pending"
+		}
+	}
+
+	task.Plan.Steps = append(task.Plan.Steps, buildPlan.Steps...)
+	task.RouteSnap.LastNode = graph.Node{}
+	task.RouteSnap.LastOut = true
+	task.PlannerReplanHint = ""
+	if err := p.Tasks.Put(task); err != nil {
+		return nil, err
+	}
+	return ports.EventPtr(ports.Event{Type: ports.EvPlanProgressed, Payload: ports.PayloadPlanProgressed{TaskID: pl.TaskID}}), nil
+
 }
 
-func resetTaskForUserInput(taskState *ports.Task, pl ports.PayloadUserInput, resetPlan bool) {
+func resetTaskForUserInput(task *ports.Task, pl ports.PayloadUserInput, resetPlan bool, preserveReplanBudget bool) {
 	if pl.TelegramChatID != 0 {
-		taskState.UserInput.TelegramChatID = pl.TelegramChatID
-		taskState.UserInput.IngressChannel = ports.IngressTelegram
+		task.UserInput.TelegramChatID = pl.TelegramChatID
+		task.UserInput.IngressChannel = ports.IngressTelegram
 	}
-	if !pl.AutoReplan {
-		taskState.ReplanAllowed = true
-		taskState.ReplanCount = 0
+	if !preserveReplanBudget {
+		task.ReplanCount = 0
+		task.ToolFailureTotal = 0
+		task.PlannerReplanHint = ""
 	}
-	taskState.UserInput.Text = pl.Text
+	task.UserInput.Text = pl.Text
 	if resetPlan {
-		taskState.Plan = nil
+		task.Plan = &ports.Plan{
+			Steps: []*ports.PlanStep{},
+		}
 	}
-	taskState.Trace = nil
-	taskState.ToolFailCount = nil
-	taskState.CapabilityFailCount = nil
-	taskState.ActiveProcedureName = ""
-	taskState.ActiveProcedureVariantID = ""
-	if taskState.RouteSnap != nil {
-		taskState.RouteSnap.ProcedurePriorNodes = nil
-		taskState.RouteSnap.ProcedurePreferredNodes = nil
-		taskState.RouteSnap.LastNode = ""
-		taskState.RouteSnap.LastOut = 0
-		taskState.RouteSnap.UserInput = pl.Text
+	if task.RouteSnap != nil {
+		task.RouteSnap.LastNode = graph.Node{}
+		task.RouteSnap.LastOut = true
+		task.RouteSnap.UserInput = pl.Text
 	}
-	taskState.RouteSnap = nil
-	taskState.TransitionPath = nil
+	task.RouteSnap = nil
 }
 
-func isComplexRequest(text string) bool {
-	if text == "" {
-		return false
+func routeSnapConfidence(rs *ports.RouteSnap) float64 {
+	if rs == nil {
+		return 0
 	}
-	lower := strings.ToLower(text)
-	return strings.Contains(lower, "然后") || strings.Contains(lower, " and ") || strings.Contains(lower, " then ")
+	return rs.Confidence
 }

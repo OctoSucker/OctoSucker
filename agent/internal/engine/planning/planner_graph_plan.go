@@ -5,35 +5,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"strings"
 
-	routinggraph "github.com/OctoSucker/agent/internal/store/routing_graph"
 	"github.com/OctoSucker/agent/pkg/ports"
+	"github.com/OctoSucker/agent/repo/graph"
+	"github.com/google/uuid"
 )
 
 // buildGraphPlan uses routing-graph frontier to choose a concrete capability/tool, then asks LLM to fill only that tool's arguments.
-func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, taskState *ports.Task, excludeCapability, excludeTool string) (*ports.Plan, error) {
-	rc := ports.RoutingContext{IntentText: taskState.UserInput.Text}
-	snap := taskState.RouteSnap
-	frontier, err := p.RouteGraph.Frontier(ctx, rc, snap.LastNode, snap.LastOut)
+func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, task *ports.Task, excludeCapability, excludeTool string) (*ports.Plan, error) {
+	intent := task.UserInput.Text
+	snap := task.RouteSnap
+	frontier, err := p.RouteGraph.Frontier(ctx, intent, snap.LastNode, snap.LastOut)
 	if err != nil {
 		return nil, fmt.Errorf("planner: graph frontier: %w", err)
 	}
 	if len(frontier) == 0 {
 		return nil, fmt.Errorf("planner: graph frontier is empty for task %s", taskID)
 	}
-	candidateNodes := make([]string, 0, len(frontier))
-	for _, nodeID := range frontier {
-		c, t, ok := routinggraph.ParseNodeID(nodeID)
-		if !ok {
+	candidateNodes := make([]graph.Node, 0, len(frontier))
+	for _, node := range frontier {
+		if excludeCapability != "" && node.Capability == excludeCapability {
 			continue
 		}
-		if excludeCapability != "" && c == excludeCapability {
+		if excludeTool != "" && node.Tool == excludeTool {
 			continue
 		}
-		if excludeTool != "" && t == excludeTool {
-			continue
-		}
-		candidateNodes = append(candidateNodes, nodeID)
+		candidateNodes = append(candidateNodes, node)
 	}
 	if len(candidateNodes) == 0 {
 		return nil, fmt.Errorf("planner: no runnable node in graph frontier for task %s", taskID)
@@ -41,16 +39,16 @@ func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, taskState *
 	selectedNode := candidateNodes[0]
 	onImmediate := p.RouteGraph.FilterCandidatesOnImmediateEdge(snap.LastNode, candidateNodes)
 	if len(onImmediate) > 0 {
-		if bestNode, ok := p.RouteGraph.PickBestByImmediateEdge(ctx, rc, snap.LastNode, onImmediate); ok {
+		if bestNode, ok := p.RouteGraph.PickBestByImmediateEdge(ctx, intent, snap.LastNode, onImmediate); ok {
 			selectedNode = bestNode
 		}
 	}
-	capID, tool, ok := routinggraph.ParseNodeID(selectedNode)
-	if !ok {
-		return nil, fmt.Errorf("planner: selected graph node %q is invalid", selectedNode)
+	if !selectedNode.IsValid() {
+		return nil, fmt.Errorf("planner: selected graph node is invalid")
 	}
+	capID, tool := selectedNode.Capability, selectedNode.Tool
 
-	toolSpec, err := p.CapRegistry.Tool(ctx, capID, tool)
+	toolSpec, err := p.RouteGraph.Tool(capID, tool)
 	if err != nil {
 		return nil, fmt.Errorf("planner: graph plan tool spec: %w", err)
 	}
@@ -63,8 +61,11 @@ func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, taskState *
 	argSystem := "You generate ONLY a JSON object for tool arguments. Return one JSON object, no markdown, no extra text."
 	argUser := fmt.Sprintf(
 		"Task: %s\nSelected node: %s\nCapability: %s\nTool: %s\nTool input schema JSON:\n%s\n\nReturn ONLY arguments JSON object for this tool.",
-		taskState.UserInput.Text, selectedNode, capID, tool, string(schemaRaw),
+		task.UserInput.Text, selectedNode.String(), capID, tool, string(schemaRaw),
 	)
+	if rh := strings.TrimSpace(task.PlannerReplanHint); rh != "" {
+		argUser = "## Recent tool failure (automatic replan)\n" + rh + "\n\n" + argUser
+	}
 	if err := p.PlannerLLM.CompleteJSON(ctx, argSystem, argUser, &args); err != nil {
 		return nil, fmt.Errorf("planner: graph plan arguments json: %w", err)
 	}
@@ -73,15 +74,14 @@ func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, taskState *
 	}
 
 	plan := &ports.Plan{
-		Steps: []ports.PlanStep{{
-			ID:         "graph-step",
-			Goal:       taskState.UserInput.Text,
+		Steps: []*ports.PlanStep{{
+			ID:         uuid.New().String(),
+			Goal:       task.UserInput.Text,
 			Capability: capID,
 			Tool:       tool,
-			DependsOn:  nil,
 			Arguments:  maps.Clone(args),
 			Status:     "pending",
 		}},
 	}
-	return reassignPlanStepIDsWithUUID(plan)
+	return plan, nil
 }

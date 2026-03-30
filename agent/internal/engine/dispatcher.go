@@ -3,30 +3,28 @@ package engine
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/OctoSucker/agent/internal/config"
 	"github.com/OctoSucker/agent/internal/engine/execution"
 	judgepkg "github.com/OctoSucker/agent/internal/engine/judge"
 	"github.com/OctoSucker/agent/internal/engine/planning"
-	"github.com/OctoSucker/agent/internal/store/capability"
-	skillsbuiltin "github.com/OctoSucker/agent/internal/store/capability/builtin/skills"
-	"github.com/OctoSucker/agent/internal/store/nodefailure"
-	procedure "github.com/OctoSucker/agent/internal/store/procedure"
-	"github.com/OctoSucker/agent/internal/store/recall"
-	routinggraph "github.com/OctoSucker/agent/internal/store/routing_graph"
-	"github.com/OctoSucker/agent/internal/store/task"
+	"github.com/OctoSucker/agent/model"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
+	"github.com/OctoSucker/agent/repo/recall"
+	routinggraph "github.com/OctoSucker/agent/repo/routing_graph"
+	"github.com/OctoSucker/agent/repo/task"
 )
+
+const MaxSteps = 200
 
 type Dispatcher struct {
 	Planner  *planning.Planner
 	Judge    *judgepkg.Judge
 	Executor *execution.AgentExecutor
-	MaxSteps int
 }
 
 func NewDispatcher(
@@ -36,9 +34,9 @@ func NewDispatcher(
 	execCfg config.Exec,
 	telegramCfg config.Telegram,
 	skillsDir string,
-	sqlDB *sql.DB,
+	data *model.AgentDB,
 ) (*Dispatcher, error) {
-	taskStore, err := task.NewTaskStore(sqlDB)
+	taskStore, err := task.NewTaskStore(data)
 	if err != nil {
 		return nil, fmt.Errorf("dispatcher: task store: %w", err)
 	}
@@ -46,71 +44,36 @@ func NewDispatcher(
 	plannerLLM := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
 	embedder := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
 	trajectoryLLM := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
-	skillStore, err := skillsbuiltin.NewFromDir(ctx, skillsDir, plannerLLM)
-	if err != nil {
-		return nil, fmt.Errorf("dispatcher: skills store: %w", err)
-	}
-	capReg, err := capability.NewCapabilityRegistry(ctx, mcpEndpoints, execCfg, telegramCfg, skillStore, plannerLLM)
-	if err != nil {
-		return nil, err
-	}
-	if err := skillStore.Reload(ctx, plannerLLM); err != nil {
-		return nil, fmt.Errorf("dispatcher: skills reload with capability catalog: %w", err)
-	}
-	if err := capReg.ResyncToolsFromRunners(ctx); err != nil {
-		return nil, fmt.Errorf("dispatcher: resync tools after skills reload: %w", err)
-	}
-	routeGraph, err := routinggraph.NewRoutingGraphFromCapabilityRegistry(capReg, sqlDB)
+	routeGraph, err := routinggraph.New(ctx, mcpEndpoints, execCfg, telegramCfg, skillsDir, plannerLLM, data)
 	if err != nil {
 		return nil, fmt.Errorf("dispatcher: routing graph: %w", err)
 	}
-	nodeFailures, err := nodefailure.NewNodeFailureStats(sqlDB)
-	if err != nil {
-		return nil, fmt.Errorf("dispatcher: node failures: %w", err)
-	}
-	procedures, err := procedure.NewProcedureRegistry(sqlDB, embedder)
-	if err != nil {
-		return nil, fmt.Errorf("dispatcher: procedure registry: %w", err)
-	}
-	recallCorpus, err := recall.NewRecallCorpus(embedder, sqlDB)
+	recallCorpus, err := recall.NewRecallCorpus(embedder, data)
 	if err != nil {
 		return nil, fmt.Errorf("dispatcher: recall corpus: %w", err)
 	}
 
+	planner, err := planning.NewPlanner(
+		taskStore,
+		routeGraph,
+		recallCorpus,
+		plannerLLM,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("dispatcher: planner: %w", err)
+	}
+
 	d := &Dispatcher{
-		MaxSteps: 200,
-		Planner: planning.NewPlanner(
-			taskStore,
-			routeGraph,
-			procedures,
-			nodeFailures,
-			recallCorpus,
-			plannerLLM,
-			capReg,
-			skillStore,
-		),
+		Planner: planner,
 		Judge: judgepkg.NewJudge(
 			taskStore,
 			routeGraph,
-			procedures,
-			capReg,
 			trajectoryLLM,
 			recallCorpus,
-			nodeFailures,
 		),
 	}
-	execAgent := execution.NewAgentExecutor(
-		taskStore,
-		routeGraph,
-		capReg,
-	)
-	execAgent.ToolExec.OnCatalogChanged = func(syncCtx context.Context) error {
-		if err := capReg.ResyncToolsFromRunners(syncCtx); err != nil {
-			return err
-		}
-		routeGraph.ReplaceStaticFromCapabilities(capReg.AllCapabilities())
-		return nil
-	}
+	execAgent := execution.NewAgentExecutor(taskStore, routeGraph)
+	execAgent.ToolExec.OnCatalogChanged = routeGraph.ResyncToolsAndStaticGraph
 	d.Executor = execAgent
 
 	return d, nil
@@ -118,7 +81,7 @@ func NewDispatcher(
 
 func (d *Dispatcher) Run(ctx context.Context, event ports.Event) error {
 	evt := event
-	for n := 1; n <= d.MaxSteps; n++ {
+	for n := 1; n <= MaxSteps; n++ {
 		var (
 			out *ports.Event
 			err error
@@ -134,14 +97,6 @@ func (d *Dispatcher) Run(ctx context.Context, event ports.Event) error {
 			out, err = d.Judge.StepCritic.HandleObservationReady(ctx, evt)
 		case ports.EvTrajectoryCheck:
 			out, err = d.Judge.TrajectoryCritic.HandleTrajectoryCheck(ctx, evt)
-		case ports.EvTurnFinalized:
-			if err := d.Judge.Learner.RecordProcedureLearning(ctx, evt); err != nil {
-				log.Printf("engine.Dispatcher.Run: record procedure learning: %v", err)
-			}
-			if err := d.Judge.RecallArchiver.ArchiveRecall(ctx, evt); err != nil {
-				log.Printf("engine.Dispatcher.Run: archive recall: %v", err)
-			}
-			out = nil
 		default:
 			return nil
 		}
@@ -154,5 +109,27 @@ func (d *Dispatcher) Run(ctx context.Context, event ports.Event) error {
 		}
 		evt = *out
 	}
-	return nil
+	return d.persistEmptyTurnIfNeeded(evt)
+}
+
+// persistEmptyTurnIfNeeded runs when the dispatcher stops only because MaxSteps was reached while
+// another event was still queued. Without this, Task.Reply and TrajectorySummary can both stay empty
+// and UserFacingTurnMessages fails even though the run "succeeded".
+func (d *Dispatcher) persistEmptyTurnIfNeeded(nextEvt ports.Event) error {
+	tid, ok := ports.TaskIDFromEvent(nextEvt)
+	if !ok {
+		return fmt.Errorf("dispatcher: max steps %d: task id not in pending event type %q", MaxSteps, nextEvt.Type)
+	}
+	task, ok := d.Planner.Tasks.Get(tid)
+	if !ok || task == nil {
+		return fmt.Errorf("dispatcher: max steps %d: task %q not found", MaxSteps, tid)
+	}
+	if strings.TrimSpace(task.Reply) != "" || strings.TrimSpace(task.TrajectorySummary) != "" {
+		return nil
+	}
+	task.Reply = fmt.Sprintf(
+		"本轮事件处理已达步数上限（%d），已停止以免长时间空转。若工具多次失败，请检查环境（例如 opencli 是否在 PATH 中；exit 127 通常表示命令未找到）。",
+		MaxSteps,
+	)
+	return d.Planner.Tasks.Put(task)
 }

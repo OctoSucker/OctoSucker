@@ -1,9 +1,10 @@
 package ports
 
 type PayloadUserInput struct {
-	TaskID     string `json:"task_id"`
-	Text       string `json:"text"`
-	AutoReplan bool   `json:"auto_replan,omitempty"`
+	TaskID string `json:"task_id"`
+	Text   string `json:"text"`
+	// PlannerContinuation: engine-injected replan (StepCritic / TrajectoryCritic); planner may append steps; ReplanCount 由任务携带。
+	PlannerContinuation bool `json:"planner_continuation,omitempty"`
 	// ExcludeCapability/ExcludeTool are optional replanning constraints for retry-driven replanning.
 	ExcludeCapability string `json:"exclude_capability,omitempty"`
 	ExcludeTool       string `json:"exclude_tool,omitempty"`
@@ -13,13 +14,6 @@ type PayloadUserInput struct {
 
 type PayloadPlanProgressed struct {
 	TaskID string `json:"task_id"`
-}
-
-type PayloadToolsBound struct {
-	TaskID     string   `json:"task_id"`
-	StepID     string   `json:"step_id"`
-	Capability string   `json:"capability"`
-	Tools      []string `json:"tools"`
 }
 
 type PayloadToolCall struct {
@@ -39,9 +33,5 @@ type PayloadObservation struct {
 }
 
 type PayloadTrajectoryCheck struct {
-	TaskID string `json:"task_id"`
-}
-
-type PayloadTurnFinalized struct {
 	TaskID string `json:"task_id"`
 }

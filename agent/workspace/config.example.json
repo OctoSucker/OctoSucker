@@ -7,6 +7,8 @@
   },
   "mcp_endpoint": [],
   "exec": {
+    "backend": "docker",
+    "macos_sandbox_profile": "",
     "workspace_dirs": ["."],
     "command_timeout_sec": 30,
     "command_blacklist": ["rm -rf /", "shutdown", "reboot"],

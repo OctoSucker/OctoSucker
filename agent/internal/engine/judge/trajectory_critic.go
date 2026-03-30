@@ -5,130 +5,103 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/OctoSucker/agent/internal/store/task"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
-	rtutils "github.com/OctoSucker/agent/utils"
+	"github.com/OctoSucker/agent/repo/recall"
+	routinggraph "github.com/OctoSucker/agent/repo/routing_graph"
+	"github.com/OctoSucker/agent/repo/task"
 )
 
-const replanScoreThreshold = 0.55
-const maxReplanRounds = 2
-const trajSystem = `You are a trajectory critic. Given the plan steps and execution trace, reply in 2-4 sentences: overall quality, any concern, whether safe to show the user. No JSON.`
+// trajSystemJSON asks for a machine-readable verdict; CompleteJSON parses it.
+const trajSystemJSON = `You judge whether a finished multi-step tool run actually satisfied the user's request.
+All steps completed without tool-level errors. Use the user's message plus each step's goal and tool output.
+Respond with JSON only (no markdown fences), exactly this shape:
+{"goal_met":true|false,"rationale":"2-4 sentences: why the goal is or is not met; if not, what was missing or wrong."}
+Be strict: incomplete, off-topic, or non-answers mean goal_met false.`
+
+type trajectoryVerdict struct {
+	GoalMet   bool   `json:"goal_met"`
+	Rationale string `json:"rationale"`
+}
 
 type TrajectoryCritic struct {
 	Tasks         *task.TaskStore
+	RouteGraph    *routinggraph.RoutingGraph
+	Recall        *recall.RecallCorpus
 	TrajectoryLLM *llmclient.OpenAI
 }
 
-func NewTrajectoryCritic(tasks *task.TaskStore, trajectoryLLM *llmclient.OpenAI) *TrajectoryCritic {
-	return &TrajectoryCritic{Tasks: tasks, TrajectoryLLM: trajectoryLLM}
+func NewTrajectoryCritic(tasks *task.TaskStore, routeGraph *routinggraph.RoutingGraph, recallCorpus *recall.RecallCorpus, trajectoryLLM *llmclient.OpenAI) *TrajectoryCritic {
+	return &TrajectoryCritic{Tasks: tasks, RouteGraph: routeGraph, Recall: recallCorpus, TrajectoryLLM: trajectoryLLM}
 }
 
 func (c *TrajectoryCritic) HandleTrajectoryCheck(ctx context.Context, evt ports.Event) (*ports.Event, error) {
 	pl := evt.Payload.(ports.PayloadTrajectoryCheck)
-	taskState, ok := c.Tasks.Get(pl.TaskID)
-	if !ok || taskState.Plan == nil {
-		return nil, nil
+	task, ok := c.Tasks.Get(pl.TaskID)
+	if !ok {
+		return nil, fmt.Errorf("trajectory_critic: task %q not found", pl.TaskID)
 	}
-	plan := *taskState.Plan
-	var score float64
-	var baseMsg string
-	if len(plan.Steps) == 0 {
-		score = 0.0
-		baseMsg = "空计划"
-	} else if len(taskState.Trace) == 0 {
-		score = 0.0
-		baseMsg = "无执行轨迹"
-	} else {
-		okCount := 0
-		for _, tr := range taskState.Trace {
-			if tr.OK {
-				okCount++
-			}
-		}
-		ratio := float64(okCount) / float64(len(taskState.Trace))
-		stepRatio := float64(len(taskState.Trace)) / float64(len(plan.Steps))
-		if stepRatio > 1 {
-			stepRatio = 1
-		}
-		score = ratio*0.7 + stepRatio*0.3
-		if okCount == len(taskState.Trace) && len(taskState.Trace) >= len(plan.Steps) {
-			baseMsg = fmt.Sprintf("轨迹完整：%d 步均成功，与计划 %d 步一致。", len(taskState.Trace), len(plan.Steps))
-		} else if okCount < len(taskState.Trace) {
-			baseMsg = fmt.Sprintf("轨迹风险：%d/%d 步成功，建议复查失败步骤后再交付用户。", okCount, len(taskState.Trace))
-		} else {
-			baseMsg = fmt.Sprintf("轨迹部分：已执行 %d 步，计划共 %d 步。", len(taskState.Trace), len(plan.Steps))
-		}
+	plan := task.Plan
+	if plan == nil || len(plan.Steps) == 0 {
+		return nil, fmt.Errorf("trajectory_critic: invariant: TrajectoryCheck with empty plan")
 	}
-	var summary string
-	if c.TrajectoryLLM == nil {
-		summary = baseMsg
-	} else {
-		var prompt strings.Builder
-		for _, st := range plan.Steps {
-			prompt.WriteString(st.ID)
-			prompt.WriteString(" ")
-			prompt.WriteString(st.Goal)
-			prompt.WriteString(" [")
-			prompt.WriteString(st.Capability)
-			prompt.WriteString("]\n")
-		}
-		prompt.WriteString("--- trace ---\n")
-		for _, tr := range taskState.Trace {
-			fmt.Fprintf(&prompt, "%s %s ok=%v %s\n", tr.StepID, tr.Tool, tr.OK, tr.PrimaryText())
-		}
-		ext, err := c.TrajectoryLLM.Complete(ctx, trajSystem, prompt.String())
-		if err != nil {
-			summary = err.Error()
-			score = 0
-		} else if ext == "" {
-			summary = "engine: empty trajectory llm reply"
-			score = 0
-		} else {
-			summary = baseMsg + "\n---\n" + ext
-		}
+	if task.RouteSnap == nil {
+		return nil, fmt.Errorf("trajectory_critic: nil RouteSnap")
 	}
-	lastStep := plan.Steps[len(plan.Steps)-1]
-	finalSendOK := false
-	if lastStep.Tool == "send_telegram_message" {
-		for _, tr := range taskState.Trace {
-			if tr.StepID == lastStep.ID && tr.OK {
-				finalSendOK = true
-				break
-			}
+	var prompt strings.Builder
+	fmt.Fprintf(&prompt, "User request:\n%s\n\nExecuted steps:\n", task.UserInput.Text)
+	for _, st := range plan.Steps {
+		if st.Status != "done" {
+			return nil, fmt.Errorf("trajectory_critic: invariant: step %q not done", st.ID)
 		}
+		fmt.Fprintf(&prompt, "StepID: %s, Goal: %s, Capability: %s, Tool: %s, Output: %s\n", st.ID, st.Goal, st.Capability, st.Tool, st.PrimaryText())
 	}
-	if finalSendOK {
-		// User-visible answer was already delivered by the tool; do not re-post prior step dumps via poll.
-		taskState.Reply = ""
-	} else {
-		var outBuilder strings.Builder
-		for _, tr := range taskState.Trace {
-			if txt := tr.PrimaryText(); txt != "" {
-				outBuilder.WriteString(txt)
-				outBuilder.WriteString("\n")
-			}
+
+	var verdict trajectoryVerdict
+	if err := c.TrajectoryLLM.CompleteJSON(ctx, trajSystemJSON, prompt.String(), &verdict); err != nil {
+		return nil, fmt.Errorf("trajectory_critic: verdict: %w", err)
+	}
+	if strings.TrimSpace(verdict.Rationale) == "" {
+		return nil, fmt.Errorf("trajectory_critic: empty rationale")
+	}
+
+	if !verdict.GoalMet {
+		if task.ReplanCount >= maxReplansPerTurn {
+			return nil, fmt.Errorf("trajectory_critic: goal not met after %d replans", maxReplansPerTurn)
 		}
-		out := outBuilder.String()
-		if strings.TrimSpace(out) == "" {
-			taskState.Reply = taskState.UserInput.Text
-		} else {
-			taskState.Reply = out
+		task.Reply = ""
+		task.TrajectorySummary = verdict.Rationale
+		task.ReplanCount++
+		if err := task.TruncatePlanFromStep(""); err != nil {
+			return nil, fmt.Errorf("trajectory_critic: truncate for replan: %w", err)
 		}
-	}
-	// TrajectorySummary = trajectory line + critic (optional second bubble).
-	taskState.TrajectoryScore = score
-	taskState.TrajectorySummary = summary
-	if err := c.Tasks.Put(taskState); err != nil {
-		return nil, err
-	}
-	if taskState.ReplanAllowed && taskState.ReplanCount < maxReplanRounds && score < replanScoreThreshold && rtutils.TraceHasFailure(taskState.Trace) {
-		taskState.ReplanCount++
-		taskState.UserInput.Text = taskState.UserInput.Text + fmt.Sprintf("\n\n[系统：上轮轨迹评分 %.2f，存在失败步骤。请生成更短、更保守的计划。]", float64(score))
-		if err := c.Tasks.Put(taskState); err != nil {
+		if err := c.Tasks.Put(task); err != nil {
 			return nil, err
 		}
-		return ports.EventPtr(ports.Event{Type: ports.EvUserInput, Payload: ports.PayloadUserInput{TaskID: pl.TaskID, Text: taskState.UserInput.Text, AutoReplan: true}}), nil
+		return ports.EventPtr(ports.Event{Type: ports.EvUserInput, Payload: ports.PayloadUserInput{
+			TaskID:              pl.TaskID,
+			Text:                task.UserInput.Text,
+			PlannerContinuation: true,
+			TelegramChatID:      task.UserInput.TelegramChatID,
+		}}), nil
 	}
-	return ports.EventPtr(ports.Event{Type: ports.EvTurnFinalized, Payload: ports.PayloadTurnFinalized{TaskID: pl.TaskID}}), nil
+
+	task.Reply = ports.UserReplyFromPlan(plan)
+	task.TrajectorySummary = fmt.Sprintf("计划 %d 步已全部执行完成。", len(plan.Steps)) + "\n---\n" + verdict.Rationale
+	task.ReplanCount = 0
+	task.ToolFailureTotal = 0
+
+	if err := c.RouteGraph.IncTotalRunsAndPersist(); err != nil {
+		return nil, fmt.Errorf("trajectory_critic: total runs: %w", err)
+	}
+	if doc := task.RecallPlannerCorpusDocument(plan); doc != "" {
+		if err := c.Recall.Write(ctx, doc); err != nil {
+			return nil, fmt.Errorf("trajectory_critic: recall write: %w", err)
+		}
+	}
+
+	if err := c.Tasks.Put(task); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }

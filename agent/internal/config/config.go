@@ -36,7 +36,15 @@ type Telegram struct {
 	AllowedChatIDs []int64 `json:"allowed_chat_ids,omitempty"`
 }
 
+// Exec sandbox backends (exec.backend JSON field).
+const (
+	ExecBackendDocker           = "docker"
+	ExecBackendMacOSSandboxExec = "macos_sandbox_exec"
+)
+
 type Exec struct {
+	Backend               string   `json:"backend"`
+	MacOSSandboxProfile   string   `json:"macos_sandbox_profile"`
 	WorkspaceDirs         []string `json:"workspace_dirs"`
 	CommandTimeoutSec     int      `json:"command_timeout_sec"`
 	CommandBlacklist      []string `json:"command_blacklist"`
@@ -79,6 +87,32 @@ func LoadWorkspace(workspaceRoot string) (*Workspace, error) {
 	}
 	if cfg.Exec.CommandTimeoutSec <= 0 {
 		cfg.Exec.CommandTimeoutSec = 30
+	}
+	switch strings.TrimSpace(cfg.Exec.Backend) {
+	case "":
+		cfg.Exec.Backend = ExecBackendDocker
+	case ExecBackendDocker, ExecBackendMacOSSandboxExec:
+	default:
+		return nil, fmt.Errorf("parse %s: exec.backend must be %q or %q", p, ExecBackendDocker, ExecBackendMacOSSandboxExec)
+	}
+	if cfg.Exec.Backend == ExecBackendMacOSSandboxExec {
+		prof := strings.TrimSpace(cfg.Exec.MacOSSandboxProfile)
+		if prof == "" {
+			return nil, fmt.Errorf("parse %s: exec.macos_sandbox_profile is required when exec.backend is %q", p, ExecBackendMacOSSandboxExec)
+		}
+		if !filepath.IsAbs(prof) {
+			prof = filepath.Clean(filepath.Join(workspaceRoot, prof))
+		} else {
+			prof = filepath.Clean(prof)
+		}
+		st, err := os.Stat(prof)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: exec.macos_sandbox_profile %q: %w", p, prof, err)
+		}
+		if st.IsDir() {
+			return nil, fmt.Errorf("parse %s: exec.macos_sandbox_profile %q must be a file", p, prof)
+		}
+		cfg.Exec.MacOSSandboxProfile = prof
 	}
 	if cfg.Exec.ContainerRuntime == "" {
 		cfg.Exec.ContainerRuntime = "docker"

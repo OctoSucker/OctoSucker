@@ -1,0 +1,18 @@
+; OctoSucker — macos_sandbox_exec profile for /usr/bin/sandbox-exec -f …
+; Agent passes: -D WORKSPACE=<cwd> -D ROOT0=<abs> [-D ROOT1= …] (see macos_sandbox.go).
+;
+; A strict (deny default) profile needs many system-specific allows (dyld, Mach, IPC).
+; This file uses (allow default) so sandbox-exec reliably runs on typical macOS setups.
+; Exec is still scoped by the agent (workspace_dirs, blacklist, timeouts); this layer is
+; an optional extra seatbelt. Tighten by replacing with a profile you validate with:
+;   sandbox-exec -f exec-macos-workspace.sb -D WORKSPACE=/tmp -D ROOT0=/tmp -- <argv0> …
+
+(version 1)
+
+(allow default)
+
+; Optional reminders for a future strict profile (not enforced while (allow default) is in effect):
+; (allow file-read* (subpath (param "ROOT0")))
+; (allow file-write* (subpath (param "ROOT0")))
+; (allow file-read* (subpath (param "WORKSPACE")))
+; (allow file-write* (subpath (param "WORKSPACE")))
