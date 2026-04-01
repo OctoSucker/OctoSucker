@@ -52,7 +52,7 @@ func configureDockerRunner(rc *runnerConfig, execCfg config.Exec) error {
 func (r *Runner) runDocker(ctx context.Context, wd, tool string, argv []string, args map[string]any) (ports.ToolResult, error) {
 	insideWD, err := mapWorkDirToContainer(wd, r.cfg.roots, r.cfg.containerWorkdir)
 	if err != nil {
-		return ports.ToolResult{}, err
+		return ports.ToolResult{Err: err}, err
 	}
 
 	dockerArgs := []string{"exec", "--workdir", insideWD}
@@ -62,12 +62,12 @@ func (r *Runner) runDocker(ctx context.Context, wd, tool string, argv []string, 
 	if rawEnv, ok := args["env"]; ok && rawEnv != nil {
 		envMap, ok := rawEnv.(map[string]any)
 		if !ok {
-			return ports.ToolResult{}, fmt.Errorf("exec builtin: argument \"env\" must be object")
+			return ports.ToolResult{Err: fmt.Errorf("exec builtin: argument \"env\" must be object")}, fmt.Errorf("exec builtin: argument \"env\" must be object")
 		}
 		for k, v := range envMap {
 			vs, ok := v.(string)
 			if !ok {
-				return ports.ToolResult{}, fmt.Errorf("exec builtin: env value for %q must be string", k)
+				return ports.ToolResult{Err: fmt.Errorf("exec builtin: env value for %q must be string", k)}, fmt.Errorf("exec builtin: env value for %q must be string", k)
 			}
 			dockerArgs = append(dockerArgs, "-e", k+"="+vs)
 		}
@@ -82,10 +82,10 @@ func (r *Runner) runDocker(ctx context.Context, wd, tool string, argv []string, 
 	cmd.Stderr = &stderr
 	err = cmd.Run()
 	if err != nil {
-		return ports.ToolResult{}, fmt.Errorf("exec builtin: %s failed (exit_code=%d): %s", tool, exitCodeFromError(err), strings.TrimSpace(stderr.String()))
+		runErr := formatExecRunError(tool, err, stderr.String())
+		return ports.ToolResult{Err: runErr}, runErr
 	}
 	return ports.ToolResult{
-		OK: true,
 		Output: map[string]any{
 			"stdout":    stdout.String(),
 			"stderr":    stderr.String(),

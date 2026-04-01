@@ -128,7 +128,8 @@ func (r *Runner) PlannerBundle() PromptBundle {
 }
 
 func (r *Runner) plannerAppendix() string {
-	return FormatPromptAppendix(r.PlannerBundle())
+	bundle := r.PlannerBundle()
+	return bundle.FormatPromptAppendix()
 }
 
 func emptyObjectSchema() map[string]any {
@@ -223,7 +224,6 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 	switch inv.Tool {
 	case ToolGetRootDir:
 		return ports.ToolResult{
-			OK: true,
 			Output: map[string]any{
 				"skills_root_dir": r.RootDir(),
 			},
@@ -239,17 +239,16 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 				"byte_size":   sk.ByteSize,
 			})
 		}
-		return ports.ToolResult{OK: true, Output: map[string]any{"skills": list}}, nil
+		return ports.ToolResult{Output: map[string]any{"skills": list}}, nil
 	case ToolReadSkill:
 		return r.invokeReadSkill(inv.Arguments)
 	case ToolGetPlannerAppendix:
 		return ports.ToolResult{
-			OK:     true,
 			Output: map[string]any{"appendix": r.plannerAppendix()},
 		}, nil
 	case ToolReloadSkills:
 		if err := r.Reload(); err != nil {
-			return ports.ToolResult{}, err
+			return ports.ToolResult{Err: err}, err
 		}
 		all := r.allSkills()
 		names := make([]string, 0, len(all))
@@ -257,7 +256,6 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 			names = append(names, sk.Name)
 		}
 		return ports.ToolResult{
-			OK: true,
 			Output: map[string]any{
 				"skills_root_dir": r.RootDir(),
 				"loaded_count":    len(all),
@@ -271,27 +269,27 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 
 func (r *Runner) invokeReadSkill(args map[string]any) (ports.ToolResult, error) {
 	if args == nil {
-		return ports.ToolResult{}, fmt.Errorf("skills builtin: read_skill requires arguments")
+		return ports.ToolResult{Err: fmt.Errorf("skills builtin: read_skill requires arguments")}, fmt.Errorf("skills builtin: read_skill requires arguments")
 	}
 	rawName, ok := args["name"].(string)
 	if !ok || strings.TrimSpace(rawName) == "" {
-		return ports.ToolResult{}, fmt.Errorf("skills builtin: read_skill argument \"name\" must be non-empty string")
+		return ports.ToolResult{Err: fmt.Errorf("skills builtin: read_skill argument \"name\" must be non-empty string")}, fmt.Errorf("skills builtin: read_skill argument \"name\" must be non-empty string")
 	}
 	name := strings.TrimSpace(rawName)
 	meta, ok := r.getSkillMeta(name)
 	if !ok {
-		return ports.ToolResult{}, fmt.Errorf("skills builtin: no skill named %q", name)
+		return ports.ToolResult{Err: fmt.Errorf("skills builtin: no skill named %q", name)}, fmt.Errorf("skills builtin: no skill named %q", name)
 	}
 	offset, err := intFromArgs(args, "offset_runes", 0)
 	if err != nil {
-		return ports.ToolResult{}, fmt.Errorf("skills builtin: read_skill offset_runes: %w", err)
+		return ports.ToolResult{Err: fmt.Errorf("skills builtin: read_skill offset_runes: %w", err)}, fmt.Errorf("skills builtin: read_skill offset_runes: %w", err)
 	}
 	if offset < 0 {
-		return ports.ToolResult{}, fmt.Errorf("skills builtin: read_skill offset_runes must be >= 0")
+		return ports.ToolResult{Err: fmt.Errorf("skills builtin: read_skill offset_runes must be >= 0")}, fmt.Errorf("skills builtin: read_skill offset_runes must be >= 0")
 	}
 	limit, err := intFromArgs(args, "limit_runes", defaultReadLimitRunes)
 	if err != nil {
-		return ports.ToolResult{}, fmt.Errorf("skills builtin: read_skill limit_runes: %w", err)
+		return ports.ToolResult{Err: fmt.Errorf("skills builtin: read_skill limit_runes: %w", err)}, fmt.Errorf("skills builtin: read_skill limit_runes: %w", err)
 	}
 	if limit < 1 {
 		limit = defaultReadLimitRunes
@@ -302,10 +300,10 @@ func (r *Runner) invokeReadSkill(args map[string]any) (ports.ToolResult, error) 
 
 	raw, err := os.ReadFile(meta.SourcePath)
 	if err != nil {
-		return ports.ToolResult{}, fmt.Errorf("skills builtin: read %q: %w", meta.SourcePath, err)
+		return ports.ToolResult{Err: fmt.Errorf("skills builtin: read %q: %w", meta.SourcePath, err)}, fmt.Errorf("skills builtin: read %q: %w", meta.SourcePath, err)
 	}
 	if !utf8.Valid(raw) {
-		return ports.ToolResult{}, fmt.Errorf("skills builtin: %q is not valid UTF-8", meta.SourcePath)
+		return ports.ToolResult{Err: fmt.Errorf("skills builtin: %q is not valid UTF-8", meta.SourcePath)}, fmt.Errorf("skills builtin: %q is not valid UTF-8", meta.SourcePath)
 	}
 	rs := []rune(string(raw))
 	total := len(rs)
@@ -321,7 +319,6 @@ func (r *Runner) invokeReadSkill(args map[string]any) (ports.ToolResult, error) 
 	eof := next >= total
 
 	return ports.ToolResult{
-		OK: true,
 		Output: map[string]any{
 			"name":               meta.Name,
 			"source_path":        meta.SourcePath,

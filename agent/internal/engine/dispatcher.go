@@ -88,15 +88,35 @@ func (d *Dispatcher) Run(ctx context.Context, event ports.Event) error {
 		)
 		switch evt.Type {
 		case ports.EvUserInput:
-			out, err = d.Planner.HandleUserInput(ctx, evt)
+			pl, ok := evt.Payload.(ports.PayloadUserInput)
+			if !ok {
+				return fmt.Errorf("dispatcher: invalid payload for %s", ports.EvUserInput)
+			}
+			out, err = d.Planner.HandleUserInput(ctx, pl)
 		case ports.EvPlanProgressed:
-			out, err = d.Executor.PlanExec.HandlePlanProgressed(ctx, evt)
+			pl, ok := evt.Payload.(ports.PayloadPlanProgressed)
+			if !ok {
+				return fmt.Errorf("dispatcher: invalid payload for %s", ports.EvPlanProgressed)
+			}
+			out, err = d.Executor.PlanExec.HandlePlanProgressed(ctx, pl)
 		case ports.EvToolCall:
-			out, err = d.Executor.ToolExec.HandleToolCall(ctx, evt)
+			pl, ok := evt.Payload.(ports.PayloadToolCall)
+			if !ok {
+				return fmt.Errorf("dispatcher: invalid payload for %s", ports.EvToolCall)
+			}
+			out, err = d.Executor.ToolExec.HandleToolCall(ctx, pl)
 		case ports.EvObservationReady:
-			out, err = d.Judge.StepCritic.HandleObservationReady(ctx, evt)
+			pl, ok := evt.Payload.(ports.PayloadObservation)
+			if !ok {
+				return fmt.Errorf("dispatcher: invalid payload for %s", ports.EvObservationReady)
+			}
+			out, err = d.Judge.StepCritic.HandleObservationReady(ctx, pl)
 		case ports.EvTrajectoryCheck:
-			out, err = d.Judge.TrajectoryCritic.HandleTrajectoryCheck(ctx, evt)
+			pl, ok := evt.Payload.(ports.PayloadTrajectoryCheck)
+			if !ok {
+				return fmt.Errorf("dispatcher: invalid payload for %s", ports.EvTrajectoryCheck)
+			}
+			out, err = d.Judge.TrajectoryCritic.HandleTrajectoryCheck(ctx, pl)
 		default:
 			return nil
 		}

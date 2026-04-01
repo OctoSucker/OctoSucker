@@ -49,6 +49,20 @@ Public API commands (`hackernews`, `v2ex`) need no browser.
 
 ## Commands Reference
 
+## Output Formats
+
+All built-in commands support `--format` / `-f` with `table`, `json`, `yaml`, `md`, and `csv`.
+The `list` command supports the same formats and also keeps `--json` as a compatibility alias.
+
+```bash
+opencli list -f yaml            # YAML command registry
+opencli bilibili hot -f table   # Default: rich table
+opencli bilibili hot -f json    # JSON (pipe to jq, feed to AI agent)
+opencli bilibili hot -f yaml    # YAML (readable structured output)
+opencli bilibili hot -f md      # Markdown(recommend)
+opencli bilibili hot -f csv     # CSV
+```
+
 ### Data Commands
 
 ```bash
@@ -562,20 +576,6 @@ opencli explore <url> --auto --click "字幕,CC,评论"
 
 # Validate: validate adapter definitions
 opencli validate
-```
-
-## Output Formats
-
-All built-in commands support `--format` / `-f` with `table`, `json`, `yaml`, `md`, and `csv`.
-The `list` command supports the same formats and also keeps `--json` as a compatibility alias.
-
-```bash
-opencli list -f yaml            # YAML command registry
-opencli bilibili hot -f table   # Default: rich table
-opencli bilibili hot -f json    # JSON (pipe to jq, feed to AI agent)
-opencli bilibili hot -f yaml    # YAML (readable structured output)
-opencli bilibili hot -f md      # Markdown
-opencli bilibili hot -f csv     # CSV
 ```
 
 ## Verbose Mode

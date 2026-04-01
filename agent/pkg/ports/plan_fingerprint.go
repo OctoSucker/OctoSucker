@@ -13,16 +13,15 @@ func PlanSemanticFingerprint(p *Plan) string {
 		return ""
 	}
 	type sigStep struct {
-		ID         string         `json:"id"`
-		Capability string         `json:"capability"`
-		Tool       string         `json:"tool,omitempty"`
-		Goal       string         `json:"goal"`
-		Arguments  map[string]any `json:"arguments,omitempty"`
+		ID        string         `json:"id"`
+		Node      string         `json:"node"`
+		Goal      string         `json:"goal"`
+		Arguments map[string]any `json:"arguments,omitempty"`
 	}
 	steps := make([]sigStep, len(p.Steps))
 	for i, st := range p.Steps {
 		steps[i] = sigStep{
-			ID: st.ID, Capability: st.Capability, Tool: st.Tool, Goal: st.Goal,
+			ID: st.ID, Node: st.Node.String(), Goal: st.Goal,
 			Arguments: maps.Clone(st.Arguments),
 		}
 	}

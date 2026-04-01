@@ -93,20 +93,20 @@ func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
 
 func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
 	if !r.HasTool(inv.Tool) {
-		return ports.ToolResult{}, fmt.Errorf("telegram builtin: unknown tool %q", inv.Tool)
+		return ports.ToolResult{Err: fmt.Errorf("telegram builtin: unknown tool %q", inv.Tool)}, fmt.Errorf("telegram builtin: unknown tool %q", inv.Tool)
 	}
 	var out string
 	switch inv.Tool {
 	case "send_telegram_message":
 		var args sendArgs
 		if err := decodeArgs(inv.Arguments, &args); err != nil {
-			return ports.ToolResult{}, fmt.Errorf("telegram builtin: arguments: %w", err)
+			return ports.ToolResult{Err: fmt.Errorf("telegram builtin: arguments: %w", err)}, fmt.Errorf("telegram builtin: arguments: %w", err)
 		}
 		out = r.toolSendTelegramMessage(ctx, args)
 	case "get_telegram_chat":
 		var args chatArgs
 		if err := decodeArgs(inv.Arguments, &args); err != nil {
-			return ports.ToolResult{}, fmt.Errorf("telegram builtin: arguments: %w", err)
+			return ports.ToolResult{Err: fmt.Errorf("telegram builtin: arguments: %w", err)}, fmt.Errorf("telegram builtin: arguments: %w", err)
 		}
 		out = r.toolGetTelegramChat(ctx, args)
 	case "get_telegram_bot_info":
@@ -114,9 +114,9 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 	case "get_telegram_allowed_chat_ids":
 		out = r.toolGetTelegramAllowedChatIDs(ctx)
 	default:
-		return ports.ToolResult{}, fmt.Errorf("telegram builtin: unknown tool %q", inv.Tool)
+		return ports.ToolResult{Err: fmt.Errorf("telegram builtin: unknown tool %q", inv.Tool)}, fmt.Errorf("telegram builtin: unknown tool %q", inv.Tool)
 	}
-	return ports.ToolResult{OK: true, Output: out}, nil
+	return ports.ToolResult{Output: out}, nil
 }
 
 func decodeArgs(m map[string]any, dst any) error {

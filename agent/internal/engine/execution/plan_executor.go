@@ -9,8 +9,7 @@ import (
 )
 
 // HandlePlanProgressed runs when Task.Plan is non-empty (dispatcher sends here after a plan exists). Empty-plan synthesis is not handled here.
-func (x *PlanExecutor) HandlePlanProgressed(ctx context.Context, evt ports.Event) (*ports.Event, error) {
-	pl := evt.Payload.(ports.PayloadPlanProgressed)
+func (x *PlanExecutor) HandlePlanProgressed(ctx context.Context, pl ports.PayloadPlanProgressed) (*ports.Event, error) {
 	task, ok := x.Tasks.Get(pl.TaskID)
 	if !ok || task.Plan == nil {
 		return nil, fmt.Errorf("plan_executor: task %q missing or no plan", pl.TaskID)
@@ -31,8 +30,11 @@ func (x *PlanExecutor) HandlePlanProgressed(ctx context.Context, evt ports.Event
 	if err := x.Tasks.Put(task); err != nil {
 		return nil, err
 	}
-	argMap := plantemplate.RenderPlanStepArguments(task, step.ID)
+	argMap, err := plantemplate.RenderPlanStepArguments(task, step.ID)
+	if err != nil {
+		return nil, fmt.Errorf("plan_executor: render step arguments: %w", err)
+	}
 	return ports.EventPtr(ports.Event{Type: ports.EvToolCall, Payload: ports.PayloadToolCall{
-		TaskID: task.ID, StepID: step.ID, Capability: step.Capability, Tool: step.Tool, Arguments: argMap,
+		TaskID: task.ID, StepID: step.ID, Node: step.Node, Arguments: argMap,
 	}}), nil
 }

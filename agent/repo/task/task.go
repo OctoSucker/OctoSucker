@@ -46,7 +46,7 @@ func (s *TaskStore) GetOrCreate(id string) (*ports.Task, error) {
 	t := &ports.Task{
 		ID: id,
 		Plan: &ports.Plan{
-			Steps: []*ports.PlanStep{},
+			Steps: make([]*ports.PlanStep, 0),
 		},
 	}
 	s.m[id] = t

@@ -4,84 +4,131 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
-	"strings"
 
 	"github.com/OctoSucker/agent/pkg/ports"
+	"github.com/OctoSucker/agent/repo/capability/mcp"
 	"github.com/OctoSucker/agent/repo/graph"
 	"github.com/google/uuid"
 )
 
 // buildGraphPlan uses routing-graph frontier to choose a concrete capability/tool, then asks LLM to fill only that tool's arguments.
-func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, task *ports.Task, excludeCapability, excludeTool string) (*ports.Plan, error) {
-	intent := task.UserInput.Text
-	snap := task.RouteSnap
-	frontier, err := p.RouteGraph.Frontier(ctx, intent, snap.LastNode, snap.LastOut)
+func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, task *ports.Task, pl ports.PayloadUserInput) (*ports.Plan, error) {
+	lastNodePtr := &graph.Node{}
+	excludeNode := &graph.Node{}
+	if task.Plan != nil && len(task.Plan.Steps) > 0 {
+		lastStep := task.Plan.Steps[len(task.Plan.Steps)-1]
+		lastNodePtr = &lastStep.Node
+		if lastStep.ToolResult.Err != nil {
+			excludeNode = &lastStep.Node
+		}
+	}
+	candidateNodes, err := p.RouteGraph.Frontier(ctx, task.UserInput, lastNodePtr, excludeNode, graph.FrontierSortAuto)
 	if err != nil {
-		return nil, fmt.Errorf("planner: graph frontier: %w", err)
-	}
-	if len(frontier) == 0 {
-		return nil, fmt.Errorf("planner: graph frontier is empty for task %s", taskID)
-	}
-	candidateNodes := make([]graph.Node, 0, len(frontier))
-	for _, node := range frontier {
-		if excludeCapability != "" && node.Capability == excludeCapability {
-			continue
-		}
-		if excludeTool != "" && node.Tool == excludeTool {
-			continue
-		}
-		candidateNodes = append(candidateNodes, node)
+		return nil, fmt.Errorf("planner: graph candidateNodes: %w", err)
 	}
 	if len(candidateNodes) == 0 {
-		return nil, fmt.Errorf("planner: no runnable node in graph frontier for task %s", taskID)
+		return nil, fmt.Errorf("planner: graph candidateNodes is empty for task %s", taskID)
 	}
 	selectedNode := candidateNodes[0]
-	onImmediate := p.RouteGraph.FilterCandidatesOnImmediateEdge(snap.LastNode, candidateNodes)
-	if len(onImmediate) > 0 {
-		if bestNode, ok := p.RouteGraph.PickBestByImmediateEdge(ctx, intent, snap.LastNode, onImmediate); ok {
-			selectedNode = bestNode
-		}
-	}
-	if !selectedNode.IsValid() {
-		return nil, fmt.Errorf("planner: selected graph node is invalid")
-	}
-	capID, tool := selectedNode.Capability, selectedNode.Tool
 
-	toolSpec, err := p.RouteGraph.Tool(capID, tool)
+	systemPrompt, userPrompt, err := p.buildGraphPlanSystemPrompt(ctx, selectedNode, task.UserInput)
+	if err != nil {
+		return nil, fmt.Errorf("planner: graph plan system prompt: %w", err)
+	}
+
+	args := make(map[string]any)
+	if err := p.PlannerLLM.CompleteJSON(ctx, systemPrompt, userPrompt, &args); err != nil {
+		return nil, fmt.Errorf("planner: graph plan arguments json: %w", err)
+	}
+	toolSpec, err := p.RouteGraph.Tool(selectedNode.Capability, selectedNode.Tool)
 	if err != nil {
 		return nil, fmt.Errorf("planner: graph plan tool spec: %w", err)
 	}
+	if err := mcp.ValidateToolArguments(selectedNode.Tool, args, toolSpec.InputSchema); err != nil {
+		return nil, fmt.Errorf("planner: validate tool arguments: %w", err)
+	}
+	parsed := &ports.PlanStep{
+		ID:        uuid.New().String(),
+		Goal:      task.UserInput,
+		Node:      selectedNode,
+		Arguments: args,
+		Status:    "pending",
+	}
+
+	return &ports.Plan{Steps: []*ports.PlanStep{parsed}}, nil
+}
+
+func (p *Planner) buildGraphPlanSystemPrompt(ctx context.Context, selectedNode graph.Node, userInput string) (string, string, error) {
+
+	systemPrompt := `
+You are a tool argument generator for an AI agent.
+
+Your job is to generate a valid JSON object for tool arguments.
+
+You are given:
+- a user task
+- a specific capability and tool
+- a JSON schema describing the tool input
+
+You must generate arguments that strictly follow the schema.
+
+You are NOT chatting.
+You are NOT planning.
+You ONLY generate arguments.
+
+--------------------------------------------------
+STRICT RULES
+
+1. Output MUST be a valid JSON object
+2. Do NOT output anything except JSON
+3. Do NOT include markdown
+4. Do NOT include explanations
+5. All required fields in schema MUST be present
+6. Field types MUST match the schema
+7. Do NOT invent fields not in schema
+8. If no arguments are needed, return {}
+
+--------------------------------------------------
+SELF CHECK BEFORE OUTPUT
+
+- Is JSON valid?
+- Does it match the schema?
+- Are all required fields present?
+- Are types correct?
+
+Then output JSON only.
+
+`
+
+	toolSpec, err := p.RouteGraph.Tool(selectedNode.Capability, selectedNode.Tool)
+	if err != nil {
+		return "", "", fmt.Errorf("planner: graph plan tool spec: %w", err)
+	}
 	schemaRaw, err := json.Marshal(toolSpec.InputSchema)
 	if err != nil {
-		return nil, fmt.Errorf("planner: marshal tool input schema: %w", err)
+		return "", "", fmt.Errorf("planner: marshal tool input schema: %w", err)
 	}
 
-	var args map[string]any
-	argSystem := "You generate ONLY a JSON object for tool arguments. Return one JSON object, no markdown, no extra text."
-	argUser := fmt.Sprintf(
-		"Task: %s\nSelected node: %s\nCapability: %s\nTool: %s\nTool input schema JSON:\n%s\n\nReturn ONLY arguments JSON object for this tool.",
-		task.UserInput.Text, selectedNode.String(), capID, tool, string(schemaRaw),
-	)
-	if rh := strings.TrimSpace(task.PlannerReplanHint); rh != "" {
-		argUser = "## Recent tool failure (automatic replan)\n" + rh + "\n\n" + argUser
-	}
-	if err := p.PlannerLLM.CompleteJSON(ctx, argSystem, argUser, &args); err != nil {
-		return nil, fmt.Errorf("planner: graph plan arguments json: %w", err)
-	}
-	if args == nil {
-		args = map[string]any{}
-	}
+	userPrompt := fmt.Sprintf(`
+	[TASK]
+	%s
+	
+	----------------------------------------
+	[CAPABILITY]
+	%s
+	
+	----------------------------------------
+	[TOOL]
+	%s
+	
+	----------------------------------------
+	[TOOL INPUT SCHEMA]
+	%s
+	
+	Generate arguments for this tool.
+	
+	Return ONLY a JSON object.
+	`, userInput, selectedNode.Capability, selectedNode.Tool, string(schemaRaw))
 
-	plan := &ports.Plan{
-		Steps: []*ports.PlanStep{{
-			ID:         uuid.New().String(),
-			Goal:       task.UserInput.Text,
-			Capability: capID,
-			Tool:       tool,
-			Arguments:  maps.Clone(args),
-			Status:     "pending",
-		}},
-	}
-	return plan, nil
+	return systemPrompt, userPrompt, nil
 }

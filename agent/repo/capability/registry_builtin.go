@@ -88,19 +88,17 @@ func (r *registryBuiltinRunner) Invoke(ctx context.Context, inv ports.Capability
 			})
 		}
 		return ports.ToolResult{
-			OK: true,
 			Output: map[string]any{
 				"capabilities": list,
 			},
 		}, nil
 	case PlannerToolAppendixTool:
 		return ports.ToolResult{
-			OK: true,
 			Output: map[string]any{
 				"appendix": r.reg.PlannerToolAppendix(),
 			},
 		}, nil
 	default:
-		return ports.ToolResult{}, fmt.Errorf("registry: unknown tool %q", inv.Tool)
+		return ports.ToolResult{Err: fmt.Errorf("registry: unknown tool %q", inv.Tool)}, fmt.Errorf("registry: unknown tool %q", inv.Tool)
 	}
 }

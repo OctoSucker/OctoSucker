@@ -11,7 +11,7 @@ type PromptBundle struct {
 	Skills  []SkillMeta
 }
 
-func FormatPromptAppendix(b PromptBundle) string {
+func (b *PromptBundle) FormatPromptAppendix() string {
 	if len(b.Skills) == 0 {
 		return ""
 	}

@@ -156,9 +156,7 @@ func (m *RecallCorpus) Recall(ctx context.Context, query string, k int) ([]strin
 	return out, nil
 }
 
-// PlannerUserContent retrieves recall chunks for userText (via Embedder-backed or lexical Recall) and
-// returns the planning LLM user message: plain userText when empty, else memories then the labeled user request.
-func (m *RecallCorpus) PlannerUserContent(ctx context.Context, userText string, k int) (string, error) {
+func (m *RecallCorpus) RecallUserHistory(ctx context.Context, userText string, k int) (string, error) {
 	chunks, err := m.Recall(ctx, userText, k)
 	if err != nil {
 		return "", err
@@ -169,8 +167,6 @@ func (m *RecallCorpus) PlannerUserContent(ctx context.Context, userText string, 
 	var b strings.Builder
 	b.WriteString("相关记忆：\n")
 	b.WriteString(strings.Join(chunks, "\n---\n"))
-	b.WriteString("\n\n用户请求：\n")
-	b.WriteString(userText)
 	return b.String(), nil
 }
 

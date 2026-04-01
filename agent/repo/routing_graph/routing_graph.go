@@ -19,16 +19,8 @@ func (s *RoutingGraph) Confidence(ctx context.Context, intent string, last graph
 	return s.g.Confidence(ctx, intent, last)
 }
 
-func (s *RoutingGraph) Frontier(ctx context.Context, intent string, last graph.Node, lastSuccess bool) ([]graph.Node, error) {
-	return s.g.Frontier(ctx, intent, last, lastSuccess)
-}
-
-func (s *RoutingGraph) FilterCandidatesOnImmediateEdge(last graph.Node, candidates []graph.Node) []graph.Node {
-	return s.g.FilterCandidatesOnImmediateEdge(last, candidates)
-}
-
-func (s *RoutingGraph) PickBestByImmediateEdge(ctx context.Context, intent string, last graph.Node, candidates []graph.Node) (graph.Node, bool) {
-	return s.g.PickBestByImmediateEdge(ctx, intent, last, candidates)
+func (s *RoutingGraph) Frontier(ctx context.Context, intent string, last *graph.Node, exclude *graph.Node, strategy graph.FrontierSortStrategy) ([]graph.Node, error) {
+	return s.g.Frontier(ctx, intent, last, exclude, strategy)
 }
 
 func (s *RoutingGraph) RecordTransition(ctx context.Context, intent string, from, to graph.Node, success bool) error {

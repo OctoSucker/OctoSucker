@@ -15,14 +15,14 @@ const RecentTransitionsCap = 200
 type Graph struct {
 	mu                sync.RWMutex
 	edges             map[Key]*EdgeStat
-	static            map[Node][]Node
+	static            map[Node][]*Node
 	recentTransitions []ContextTransition
 	totalRuns         int64
 	db                *model.AgentDB
 }
 
 // New returns an empty learned edge map over the given static adjacency bound to db for load/persist.
-func New(static map[Node][]Node, db *model.AgentDB) (*Graph, error) {
+func New(static map[Node][]*Node, db *model.AgentDB) (*Graph, error) {
 	if db == nil {
 		return nil, fmt.Errorf("graph: AgentDB is nil")
 	}
@@ -33,19 +33,27 @@ func New(static map[Node][]Node, db *model.AgentDB) (*Graph, error) {
 	}, nil
 }
 
-func cloneStatic(m map[Node][]Node) map[Node][]Node {
+func cloneStatic(m map[Node][]*Node) map[Node][]*Node {
 	if m == nil {
-		return map[Node][]Node{}
+		return map[Node][]*Node{}
 	}
-	out := make(map[Node][]Node, len(m))
+	out := make(map[Node][]*Node, len(m))
 	for k, v := range m {
-		out[k] = append([]Node(nil), v...)
+		cp := make([]*Node, 0, len(v))
+		for _, n := range v {
+			if n == nil {
+				continue
+			}
+			x := *n
+			cp = append(cp, &x)
+		}
+		out[k] = cp
 	}
 	return out
 }
 
 // ReplaceStatic replaces the static adjacency map (e.g. after capability resync).
-func (g *Graph) ReplaceStatic(static map[Node][]Node) {
+func (g *Graph) ReplaceStatic(static map[Node][]*Node) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.static = cloneStatic(static)
@@ -162,23 +170,40 @@ func (g *Graph) TotalVisits() int {
 }
 
 // EntryNodes returns a copy of successors of the synthetic entry vertex.
-func (g *Graph) EntryNodes() []Node {
+func (g *Graph) EntryNodes() []*Node {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return append([]Node(nil), g.static[Node{}]...)
+	next := g.static[Node{}]
+	out := make([]*Node, 0, len(next))
+	for _, n := range next {
+		if n == nil {
+			continue
+		}
+		x := *n
+		out = append(out, &x)
+	}
+	return out
 }
 
 // StaticSuccessors returns static[last], or entry nodes when last has no outgoing edges.
-func (g *Graph) StaticSuccessors(last Node) []Node {
+func (g *Graph) StaticSuccessors(last Node) []*Node {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.staticSuccessorsLocked(last)
 }
 
-func (g *Graph) staticSuccessorsLocked(last Node) []Node {
+func (g *Graph) staticSuccessorsLocked(last Node) []*Node {
 	next := g.static[last]
 	if len(next) == 0 {
-		return append([]Node(nil), g.static[Node{}]...)
+		next = g.static[Node{}]
 	}
-	return append([]Node(nil), next...)
+	out := make([]*Node, 0, len(next))
+	for _, n := range next {
+		if n == nil {
+			continue
+		}
+		x := *n
+		out = append(out, &x)
+	}
+	return out
 }

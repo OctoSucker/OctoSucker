@@ -51,13 +51,13 @@ func (r *Runner) runMacOSSandbox(ctx context.Context, wd, tool string, argv []st
 	if rawEnv, ok := args["env"]; ok && rawEnv != nil {
 		envMap, ok := rawEnv.(map[string]any)
 		if !ok {
-			return ports.ToolResult{}, fmt.Errorf("exec builtin: argument \"env\" must be object")
+			return ports.ToolResult{Err: fmt.Errorf("exec builtin: argument \"env\" must be object")}, fmt.Errorf("exec builtin: argument \"env\" must be object")
 		}
 		extra := make(map[string]string, len(envMap))
 		for k, v := range envMap {
 			vs, ok := v.(string)
 			if !ok {
-				return ports.ToolResult{}, fmt.Errorf("exec builtin: env value for %q must be string", k)
+				return ports.ToolResult{Err: fmt.Errorf("exec builtin: env value for %q must be string", k)}, fmt.Errorf("exec builtin: env value for %q must be string", k)
 			}
 			extra[k] = vs
 		}
@@ -65,10 +65,10 @@ func (r *Runner) runMacOSSandbox(ctx context.Context, wd, tool string, argv []st
 	}
 	err := cmd.Run()
 	if err != nil {
-		return ports.ToolResult{}, fmt.Errorf("exec builtin: %s failed (exit_code=%d): %s", tool, exitCodeFromError(err), strings.TrimSpace(stderr.String()))
+		runErr := formatExecRunError(tool, err, stderr.String())
+		return ports.ToolResult{Err: runErr}, runErr
 	}
 	return ports.ToolResult{
-		OK: true,
 		Output: map[string]any{
 			"stdout":    stdout.String(),
 			"stderr":    stderr.String(),

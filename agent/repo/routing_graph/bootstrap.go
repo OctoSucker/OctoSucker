@@ -63,7 +63,7 @@ func (s *RoutingGraph) requireRegistry() error {
 // Invoke runs a tool through the embedded capability registry.
 func (s *RoutingGraph) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
 	if err := s.requireRegistry(); err != nil {
-		return ports.ToolResult{}, err
+		return ports.ToolResult{Err: err}, err
 	}
 	return s.reg.Invoke(ctx, inv)
 }
@@ -84,11 +84,12 @@ func (s *RoutingGraph) PlannerToolAppendix() (string, error) {
 	return s.reg.PlannerToolAppendix(), nil
 }
 
-func (s *RoutingGraph) PlannerSkills() (skillsbuiltin.PromptBundle, error) {
+func (s *RoutingGraph) PlannerSkills() (string, error) {
 	if err := s.requireRegistry(); err != nil {
-		return skillsbuiltin.PromptBundle{}, err
+		return "", err
 	}
-	return s.reg.PlannerSkills(), nil
+	bundle := s.reg.PlannerSkills()
+	return bundle.FormatPromptAppendix(), nil
 }
 
 // Tool resolves MCP tool metadata for a capability/tool pair.

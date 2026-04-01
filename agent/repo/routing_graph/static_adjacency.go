@@ -23,7 +23,7 @@ func (s *RoutingGraph) ResyncToolsAndStaticGraph(ctx context.Context) error {
 
 // staticAdjacencyFromCapabilities builds the static adjacency map: synthetic root graph.Node{}
 // lists all capability/tool nodes; each node has an empty successor list (planner supplies paths).
-func staticAdjacencyFromCapabilities(m map[string]ports.Capability) map[graph.Node][]graph.Node {
+func staticAdjacencyFromCapabilities(m map[string]ports.Capability) map[graph.Node][]*graph.Node {
 	if m == nil {
 		m = map[string]ports.Capability{}
 	}
@@ -34,12 +34,17 @@ func staticAdjacencyFromCapabilities(m map[string]ports.Capability) map[graph.No
 			if !n.IsValid() {
 				continue
 			}
-			ids = append(ids, n)
+			ids = append(ids, *n)
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
-	static := make(map[graph.Node][]graph.Node, len(ids)+1)
-	static[graph.Node{}] = append([]graph.Node(nil), ids...)
+	static := make(map[graph.Node][]*graph.Node, len(ids)+1)
+	entry := make([]*graph.Node, 0, len(ids))
+	for _, id := range ids {
+		n := id
+		entry = append(entry, &n)
+	}
+	static[graph.Node{}] = entry
 	for _, id := range ids {
 		static[id] = nil
 	}

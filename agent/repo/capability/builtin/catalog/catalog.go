@@ -77,15 +77,15 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 	case ToolJustChatUsingLLM:
 		um, err := parseUserMessage(inv.Arguments)
 		if err != nil {
-			return ports.ToolResult{}, err
+			return ports.ToolResult{Err: err}, nil
 		}
 		reply, err := r.llm.Complete(ctx, justChatSystemPrompt, um)
 		if err != nil {
-			return ports.ToolResult{}, fmt.Errorf("catalog builtin: just_chat_using_llm: %w", err)
+			return ports.ToolResult{Err: fmt.Errorf("catalog builtin: just_chat_using_llm: %w", err)}, fmt.Errorf("catalog builtin: just_chat_using_llm: %w", err)
 		}
-		return ports.ToolResult{OK: true, Output: strings.TrimSpace(reply)}, nil
+		return ports.ToolResult{Output: strings.TrimSpace(reply)}, nil
 	default:
-		return ports.ToolResult{}, fmt.Errorf("catalog builtin: unknown tool %q", inv.Tool)
+		return ports.ToolResult{Err: fmt.Errorf("catalog builtin: unknown tool %q", inv.Tool)}, fmt.Errorf("catalog builtin: unknown tool %q", inv.Tool)
 	}
 }
 

@@ -4,28 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/OctoSucker/agent/pkg/ports"
-	skillsbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/skills"
 	"github.com/OctoSucker/agent/repo/capability/mcp"
 	"github.com/google/uuid"
 )
 
-func (p *Planner) buildLLMPlan(ctx context.Context, taskID string, task *ports.Task) (*ports.Plan, error) {
-	baseUser, err := p.RecallCorpus.PlannerUserContent(ctx, task.UserInput.Text, 5)
-	if err != nil {
-		log.Printf("engine.Dispatcher: recall failed task=%s err=%v", taskID, err)
-		return nil, fmt.Errorf("planner: recall: %w", err)
-	}
-	user := plannerLLMUserMessageWithReplanHint(task.PlannerReplanHint, baseUser)
+func (p *Planner) buildLLMPlan(ctx context.Context, taskID string, task *ports.Task, failureSummary string) (*ports.Plan, error) {
 
-	system, err := p.buildPlannerSystemPrompt()
+	systemPrompt, userRequest, err := p.buildPlannerSystemPrompt(ctx, task, failureSummary)
 	if err != nil {
 		return nil, fmt.Errorf("planner: system prompt: %w", err)
 	}
 	var x llmPlanResponse
-	if err := p.PlannerLLM.CompleteJSON(ctx, system, user, &x); err != nil {
+	if err := p.PlannerLLM.CompleteJSON(ctx, systemPrompt, userRequest, &x); err != nil {
 		log.Printf("engine.Dispatcher: plan JSON parse failed task=%s err=%v", taskID, err)
 		return nil, fmt.Errorf("planner: llm plan json: %w", err)
 	}
@@ -37,61 +29,135 @@ func (p *Planner) buildLLMPlan(ctx context.Context, taskID string, task *ports.T
 
 	parsed := &ports.Plan{}
 	for _, st := range x.Steps {
-		t, err := p.RouteGraph.Tool(st.Capability, st.Tool)
+		t, err := p.RouteGraph.Tool(st.Node.Capability, st.Node.Tool)
 		if err != nil {
 			return nil, fmt.Errorf("planner: tool: %w", err)
 		}
-		if err := mcp.ValidateToolArguments(st.Tool, st.Arguments, t.InputSchema); err != nil {
+		if err := mcp.ValidateToolArguments(st.Node.Tool, st.Arguments, t.InputSchema); err != nil {
 			return nil, fmt.Errorf("planner: validate tool arguments: %w", err)
 		}
 		parsed.Steps = append(parsed.Steps, &ports.PlanStep{
-			ID:         uuid.New().String(),
-			Goal:       st.Goal,
-			Capability: st.Capability,
-			Tool:       st.Tool,
-			Arguments:  st.Arguments,
-			Status:     "pending",
+			ID:        uuid.New().String(),
+			Goal:      st.Goal,
+			Node:      st.Node,
+			Arguments: st.Arguments,
+			Status:    "pending",
 		})
 	}
 	return parsed, nil
 }
 
-func (p *Planner) buildPlannerSystemPrompt() (string, error) {
-	const planPreamble = `Reply with exactly one JSON object: {"steps":[...]}.
-Each step needs "goal" (string). Set "capability" and "tool" to match one line in the tools appendix below (tool name and [capability=...] on that line). Include "arguments" per that line's JSON Schema, or {} / omit when empty.
-"steps" must contain at least one step; run in array order. For greetings, small talk, or other purely conversational turns that need no filesystem/exec/external APIs, use capability=catalog and tool=just_chat_using_llm with the user's text in arguments.user_message; the engine already delivers the reply to the user—do not use Telegram or other send-message tools only to relay chat text.
-When a capability lists multiple tools, set "tool" to the exact name from the appendix; if "tool" is omitted the runtime uses that capability's first tool only—prefer an explicit "tool" when schemas differ.
-For exec, capability is always exec and tool is always run_command (see [capability=exec] in the appendix). Put the executable in arguments.program (e.g. opencli, npm, git). Use program sh or bash only when you need a shell; then arguments.args must be exactly two elements: "-c" and one string containing the full shell command (never pass bare sh with multiple tokens like ["npm","install"]—that is invalid).`
+func (p *Planner) buildPlannerSystemPrompt(ctx context.Context, task *ports.Task, failureSummary string) (string, string, error) {
 
-	toolApp, err := p.RouteGraph.PlannerToolAppendix()
-	if err != nil {
-		return "", err
-	}
-	system := planPreamble + "\n\n" + toolApp
-	bundle, err := p.RouteGraph.PlannerSkills()
-	if err != nil {
-		return "", err
-	}
-	if sa := strings.TrimSpace(skillsbuiltin.FormatPromptAppendix(bundle)); sa != "" {
-		system += "\n\n" + sa
-		system += "\n\nWhen a skill matches the user intent, call capability=skills tools (list_skills, read_skill with pagination via offset_runes/next_offset_runes, reload_skills, get_skills_planner_appendix, get_skills_root_dir) to load markdown; then follow that text when choosing exec or other capabilities. The JSON \"tool\" field must match the tools appendix exactly (e.g. read_skill)—not the skill file stem (e.g. not \"opencli\")."
-	}
+	const systemPrompt = `
+You are the planning module of an AI agent.
 
-	system += "\n\nWhen using exec for workspace files, set arguments.work_dir relative to workspace root and keep paths in arguments.args relative to work_dir; do not use host absolute paths like /Users/... or C:\\... in args."
-	system += "\n\nExec work_dir is only allowed under the agent workspace roots (same tree as relative work_dir): never use /tmp, /var/tmp, or other paths outside that tree. For scratch space use a relative directory such as tmp or sandbox/tmp and mkdir -p it in an earlier sh step if needed."
-	system += "\n\nIf the user message includes a section \"Recent tool failure (automatic replan)\", that block is only factual (failed goal, capability/tool, arguments JSON, error text). You must interpret it and choose the next steps—e.g. whether a missing binary requires prior install commands from the skills appendix. Do not repeat the same failing invocation unless the error is clearly transient (e.g. timeout)."
-	system += "\n\nWhen you infer from the error text that arguments.program is unavailable (e.g. execvp() of 'PROGRAM' failed: No such file or directory, command not found, exit 127), treat PROGRAM as not installed or not on PATH in the exec environment—not bad flags. Do not emit a plan that is only another single step with the same program for the same user goal; add earlier exec steps that install PROGRAM (from the matching skill's install section or a standard package manager), then run PROGRAM again. If install commands are absent from skills, choose a reasonable package-manager exec step for the host OS."
-	system += "\n\nSecondary fallback when the user only needs a normal browser URL opened on macOS and PROGRAM stays unavailable: use capability=exec, tool=run_command, program open, and pass the URL in arguments.args; if that also fails in replan, do not alternate forever—prefer telling the user via catalog/just_chat_using_llm that the host blocks GUI open from sandbox and they must install PROGRAM or run open outside the agent."
-	system += "\n\nIgnore step id and status if you emit them: the engine assigns new ids and marks every new step pending."
-	return system, nil
+Your job is to generate a plan to achieve the user's goal by calling capability tools.
+
+You are NOT chatting.
+You are NOT executing tools.
+You ONLY generate a plan.
+
+--------------------------------------------------
+PLANNING RULES
+
+1. The plan must achieve the user's goal
+2. Steps are executed in order
+3. Each step must call exactly one tool
+4. Use only provided capabilities and tools
+5. Do NOT invent capabilities or tools
+6. Keep the plan minimal but complete
+7. goal describes the outcome, NOT the command
+8. arguments must match the tool parameter schema
+
+--------------------------------------------------
+NODE FORMAT (VERY IMPORTANT)
+
+Each step must contain a node object:
+--------------------------------------------------
+EXEC TOOL RULES
+
+For exec capability:
+
+- arguments.program must be the executable (git, npm, etc.)
+- Use "sh" ONLY when necessary
+- When using shell:
+  arguments.args MUST be:
+  ["-c", "full command string"]
+
+--------------------------------------------------
+OUTPUT FORMAT
+
+Return exactly one JSON object:
+
+{
+  "steps": [
+    {
+      "goal": "string",
+      "node": {
+        "capability": "string",
+        "tool": "string"
+      },
+      "arguments": {}
+    }
+  ]
 }
 
-func plannerLLMUserMessageWithReplanHint(hint, baseUser string) string {
-	h := strings.TrimSpace(hint)
-	if h == "" {
-		return baseUser
+Rules:
+- MUST be valid JSON
+- NO extra text outside JSON
+- steps must contain at least one step
+- arguments must be an object (use {} if empty)
+
+--------------------------------------------------
+SELF CHECK BEFORE OUTPUT
+
+- JSON is valid
+- Each step has goal, node, arguments
+- node.capability exists
+- node.tool exists
+- arguments is an object
+- The plan actually helps achieve the user's goal
+`
+
+	skillsAppendix, err := p.RouteGraph.PlannerSkills()
+	if err != nil {
+		return "", "", err
 	}
-	return "## Recent tool failure (automatic replan)\n" + h + "\n\n" + baseUser
+	toolsAppendix, err := p.RouteGraph.PlannerToolAppendix()
+	if err != nil {
+		return "", "", err
+	}
+	userHistory, err := p.RecallCorpus.RecallUserHistory(ctx, task.UserInput, 5)
+	if err != nil {
+		log.Printf("engine.Dispatcher: recall failed err=%v", err)
+		return "", "", fmt.Errorf("planner: recall: %w", err)
+	}
+
+	userPrompt := fmt.Sprintf(`
+	[USER GOAL]
+	%s
+	
+	----------------------------------------
+	[AVAILABLE SKILLS]
+	%s
+	
+	----------------------------------------
+	[AVAILABLE CAPABILITIES AND TOOLS]
+	%s
+	
+	----------------------------------------
+	[USER HISTORY]
+	%s
+	
+	----------------------------------------
+	[LAST TOOL ERROR]
+	%s
+	
+	Generate a new plan.
+	`, task.UserInput, skillsAppendix, toolsAppendix, userHistory, failureSummary)
+
+	return systemPrompt, userPrompt, nil
 }
 
 type llmPlanResponse struct {

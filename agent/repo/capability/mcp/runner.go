@@ -96,25 +96,25 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 	defer r.mu.RUnlock()
 	ok := r.HasTool(inv.Tool)
 	if !ok {
-		return ports.ToolResult{}, fmt.Errorf("mcp: tool %q not exposed by MCP server", inv.Tool)
+		return ports.ToolResult{Err: fmt.Errorf("mcp: tool %q not exposed by MCP server", inv.Tool)}, fmt.Errorf("mcp: tool %q not exposed by MCP server", inv.Tool)
 	}
 
 	res, err := r.sess.CallTool(ctx, &mcp.CallToolParams{Name: inv.Tool, Arguments: inv.Arguments})
 	if err != nil {
 		log.Printf("mcp: CallTool failed tool=%q arguments=%v err=%v", inv.Tool, inv.Arguments, err)
-		return ports.ToolResult{}, err
+		return ports.ToolResult{Err: err}, err
 	}
 	if res.IsError {
 		msg := joinTextContent(res.Content)
 		if msg == "" {
 			msg = "tool error"
 		}
-		return ports.ToolResult{OK: false, Output: msg, Err: errors.New(msg)}, nil
+		return ports.ToolResult{Output: msg, Err: errors.New(msg)}, nil
 	}
 	if res.StructuredContent != nil {
-		return ports.ToolResult{OK: true, Output: fmt.Sprintf("%v", res.StructuredContent)}, nil
+		return ports.ToolResult{Output: fmt.Sprintf("%v", res.StructuredContent)}, nil
 	}
-	return ports.ToolResult{OK: true, Output: joinTextContent(res.Content)}, nil
+	return ports.ToolResult{Output: joinTextContent(res.Content)}, nil
 }
 
 func joinTextContent(content []mcp.Content) string {

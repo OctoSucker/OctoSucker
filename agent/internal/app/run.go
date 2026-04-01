@@ -35,9 +35,8 @@ func (a *App) runTurn(ctx context.Context, taskSeed string, telegramChatID int64
 
 	taskID := ports.NewTaskIDFromSeed(taskSeed)
 	event := ports.Event{Type: ports.EvUserInput, Payload: ports.PayloadUserInput{
-		TaskID:         taskID,
-		Text:           text,
-		TelegramChatID: telegramChatID,
+		TaskID: taskID,
+		Text:   text,
 	}}
 	if err := a.Dispatcher.Run(ctx, event); err != nil {
 		log.Printf("app.runTurn: dispatcher error task=%s err=%v", taskID, err)

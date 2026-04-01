@@ -6,7 +6,13 @@ import (
 	"sort"
 )
 
-const globalDistInf = 1e18
+type FrontierSortStrategy string
+
+const (
+	FrontierSortAuto               FrontierSortStrategy = "auto"
+	FrontierSortIntentHeavy        FrontierSortStrategy = "intent_heavy"
+	FrontierSortTransitionBalanced FrontierSortStrategy = "transition_balanced"
+)
 
 func similarIntentScoreLocked(g *Graph, intent, from, to string) float64 {
 	if intent == "" {
@@ -40,37 +46,6 @@ func similarIntentScoreLocked(g *Graph, intent, from, to string) float64 {
 	return float64(success) / float64(total)
 }
 
-func edgeWeightGlobalLocked(g *Graph, from, to Node) float64 {
-	k := Key{From: from, To: to}
-	e := g.edges[k]
-	p := 0.5
-	if e != nil && e.Success+e.Failure > 0 {
-		p = e.Success / (e.Success + e.Failure)
-	}
-	w := 1.0 - p
-	if e != nil {
-		if e.Latency > 0 {
-			w += e.Latency * 0.001
-		}
-		if e.Cost > 0 {
-			w += e.Cost * 0.01
-		}
-	}
-	if w < 1e-9 {
-		w = 1e-9
-	}
-	return w
-}
-
-func immediateSuccessorSetLocked(g *Graph, last Node) map[string]struct{} {
-	next := g.staticSuccessorsLocked(last)
-	m := make(map[string]struct{}, len(next))
-	for _, toN := range next {
-		m[toN.String()] = struct{}{}
-	}
-	return m
-}
-
 func totalVisitsLocked(g *Graph) int {
 	var n int
 	for _, e := range g.edges {
@@ -90,7 +65,11 @@ func (g *Graph) Confidence(ctx context.Context, intent string, last Node) float6
 	}
 	totalVisits := totalVisitsLocked(g)
 	best := 0.0
-	for _, toN := range next {
+	for _, toNPtr := range next {
+		if toNPtr == nil {
+			continue
+		}
+		toN := *toNPtr
 		k := Key{From: last, To: toN}
 		e := g.edges[k]
 		successRate := 0.5
@@ -129,14 +108,17 @@ func (g *Graph) Confidence(ctx context.Context, intent string, last Node) float6
 	return best
 }
 
-// Frontier ranks one-hop successors (or entries) by the same heuristic as Confidence.
-// lastSuccess is reserved for outcome-conditioned expansion; currently unused.
-func (g *Graph) Frontier(ctx context.Context, intent string, last Node, lastSuccess bool) ([]Node, error) {
+// Frontier ranks one-hop successors (or entries).
+// last=nil means entry node. exclude is optional and removed from candidates when set.
+func (g *Graph) Frontier(ctx context.Context, intent string, last *Node, exclude *Node, strategy FrontierSortStrategy) ([]Node, error) {
 	_ = ctx
-	_ = lastSuccess
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	next := g.staticSuccessorsLocked(last)
+	lastNode := Node{}
+	if last != nil {
+		lastNode = *last
+	}
+	next := g.staticSuccessorsLocked(lastNode)
 	if len(next) == 0 {
 		return nil, nil
 	}
@@ -146,8 +128,15 @@ func (g *Graph) Frontier(ctx context.Context, intent string, last Node, lastSucc
 		score float64
 	}
 	var list []scored
-	for _, toN := range next {
-		k := Key{From: last, To: toN}
+	for _, toNPtr := range next {
+		if toNPtr == nil {
+			continue
+		}
+		toN := *toNPtr
+		if exclude != nil && exclude.IsValid() && toN == *exclude {
+			continue
+		}
+		k := Key{From: lastNode, To: toN}
 		e := g.edges[k]
 		successRate := 0.5
 		costScore := 0.0
@@ -164,20 +153,21 @@ func (g *Graph) Frontier(ctx context.Context, intent string, last Node, lastSucc
 				costScore -= e.Latency * 0.001
 			}
 		}
-		ctxScore := similarIntentScoreLocked(g, intent, last.String(), toN.String())
+		ctxScore := similarIntentScoreLocked(g, intent, lastNode.String(), toN.String())
 		exploration := 0.0
 		if totalVisits >= 0 {
 			exploration = math.Sqrt(math.Log(float64(totalVisits+1)) / float64(edgeTotal+1))
 		}
-		explorationWeight := 0.09
+		explorationDecay := 1.0
 		if g.totalRuns > 0 {
 			decay := math.Exp(-0.001 * float64(g.totalRuns))
 			if decay < 0.02 {
 				decay = 0.02
 			}
-			explorationWeight = 0.09 * decay
+			explorationDecay = decay
 		}
-		combined := successRate*0.55 + ctxScore*0.27 + costScore*0.09 + exploration*explorationWeight
+		intentW, successW, costW, exploreW := frontierWeights(strategy, last == nil)
+		combined := successRate*successW + ctxScore*intentW + costScore*costW + exploration*exploreW*explorationDecay
 		list = append(list, scored{node: toN, score: combined})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].score > list[j].score })
@@ -188,48 +178,18 @@ func (g *Graph) Frontier(ctx context.Context, intent string, last Node, lastSucc
 	return out, nil
 }
 
-// FilterCandidatesOnImmediateEdge keeps only candidates that are direct static successors of last.
-func (g *Graph) FilterCandidatesOnImmediateEdge(last Node, candidates []Node) []Node {
-	if len(candidates) == 0 {
-		return nil
-	}
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	nextFromLast := immediateSuccessorSetLocked(g, last)
-	out := make([]Node, 0, len(candidates))
-	for _, c := range candidates {
-		if _, ok := nextFromLast[c.String()]; ok {
-			out = append(out, c)
+func frontierWeights(strategy FrontierSortStrategy, isEntry bool) (intentW, successW, costW, exploreW float64) {
+	switch strategy {
+	case FrontierSortIntentHeavy:
+		return 0.45, 0.40, 0.08, 0.07
+	case FrontierSortTransitionBalanced:
+		return 0.18, 0.64, 0.10, 0.08
+	case FrontierSortAuto, "":
+		if isEntry {
+			return 0.40, 0.45, 0.08, 0.07
 		}
+		return 0.20, 0.62, 0.10, 0.08
+	default:
+		return 0.20, 0.62, 0.10, 0.08
 	}
-	return out
-}
-
-// PickBestByImmediateEdge returns the feasible candidate with minimal immediate edge weight among
-// candidates on a static one-hop edge from last.
-func (g *Graph) PickBestByImmediateEdge(ctx context.Context, intent string, last Node, candidates []Node) (Node, bool) {
-	_ = ctx
-	_ = intent
-	if len(candidates) == 0 {
-		return Node{}, false
-	}
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	nextFromLast := immediateSuccessorSetLocked(g, last)
-	bestC := Node{}
-	bestWeight := globalDistInf
-	for _, c := range candidates {
-		if _, ok := nextFromLast[c.String()]; !ok {
-			continue
-		}
-		w := edgeWeightGlobalLocked(g, last, c)
-		if w < bestWeight {
-			bestWeight = w
-			bestC = c
-		}
-	}
-	if !bestC.IsValid() {
-		return Node{}, false
-	}
-	return bestC, true
 }

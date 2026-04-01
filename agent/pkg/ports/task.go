@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
-
-	"github.com/OctoSucker/agent/repo/graph"
 )
 
 type RouteType string
@@ -18,14 +16,12 @@ const (
 )
 
 // RouteSnap carries routing context for execution-time decisions.
-// LastNode uses graph.Node (JSON: canonical cap::tool strings).
+// LastNode points to graph.Node (JSON: canonical cap::tool strings); nil means no last node.
 // LastOut is whether the last recorded hop succeeded (true after fresh plan / reset; false after a failed tool observation).
 type RouteSnap struct {
-	LastNode   graph.Node `json:"last_node,omitempty"`
-	LastOut    bool       `json:"last_out,omitempty"`
-	UserInput  string     `json:"user_input,omitempty"`
-	RouteType  RouteType  `json:"route_type"`
-	Confidence float64    `json:"confidence"`
+	UserInput  string    `json:"user_input,omitempty"`
+	RouteType  RouteType `json:"route_type"`
+	Confidence float64   `json:"confidence"`
 }
 
 // Task 是单次用户消息触发的、贯穿 Planner → 执行 → 评判 的可变状态，随 Ev* 处理链读写并持久化。
@@ -35,11 +31,7 @@ type RouteSnap struct {
 type Task struct {
 	// --- 贯穿多阶段：标识、本轮用户原文、当前计划（Planner 写入 Plan；执行与评判改写步骤状态）---
 	ID        string `json:"id"` // UUID；SQLite PRIMARY KEY
-	UserInput struct {
-		Text           string `json:"text"`
-		TelegramChatID int64  `json:"telegram_chat_id,omitempty"`
-		IngressChannel string `json:"ingress_channel,omitempty"`
-	}
+	UserInput string `json:"user_input"`
 
 	// --- EvUserInput（Planner）：路由快照与技能先验；之后 PlanExec（RouteSnap）与 StepCritic 读取 ---
 	RouteSnap *RouteSnap `json:"route_snap,omitempty"`
@@ -51,10 +43,7 @@ type Task struct {
 	Reply string `json:"reply"`
 	// TrajectorySummary：轨迹评判正文——规则生成的 baseMsg（步数/成功率等）+ LLM 点评；与用户可见「执行结果」Reply 分离。
 	TrajectorySummary string `json:"trajectory_summary,omitempty"`
-	ReplanCount      int `json:"replan_count,omitempty"`
-	ToolFailureTotal int `json:"tool_failure_total,omitempty"` // StepCritic：每则失败观测 +1；与 ReplanCount 均在非续写 UserInput 时清零
-	// PlannerReplanHint：StepCritic 在工具失败触发重规划前写入；Planner 读入 LLM user 消息后在本轮成功出 plan 后清空。
-	PlannerReplanHint string `json:"planner_replan_hint,omitempty"`
+	ReplanCount       int    `json:"replan_count,omitempty"`
 }
 
 const IngressTelegram = "telegram"
@@ -84,55 +73,56 @@ func (t *Task) TruncatePlanFromStep(failedStepID string) error {
 		return fmt.Errorf("task: nil RouteSnap")
 	}
 	if failedStepID == "" {
-		t.Plan = nil
-		t.RouteSnap.LastNode = graph.Node{}
-		t.RouteSnap.LastOut = true
-		return nil
-	}
-	if t.Plan == nil || len(t.Plan.Steps) == 0 {
-		return fmt.Errorf("task: cannot truncate plan (failed step %q)", failedStepID)
-	}
-	cut := -1
-	for i := range t.Plan.Steps {
-		if t.Plan.Steps[i].ID == failedStepID {
-			cut = i
-			break
+		t.Plan = &Plan{
+			Steps: make([]*PlanStep, 0),
 		}
-	}
-	if cut < 0 {
-		return fmt.Errorf("task: failed step %q not found in plan", failedStepID)
-	}
-	t.Plan.Steps = t.Plan.Steps[:cut]
-	if len(t.Plan.Steps) == 0 {
-		t.Plan = nil
-		t.RouteSnap.LastNode = graph.Node{}
-		t.RouteSnap.LastOut = true
+		return nil
+	} else {
+		if t.Plan == nil || len(t.Plan.Steps) == 0 {
+			return fmt.Errorf("task: cannot truncate plan (failed step %q)", failedStepID)
+		}
+		cut := -1
+		for i := range t.Plan.Steps {
+			if t.Plan.Steps[i].ID == failedStepID {
+				cut = i
+				break
+			}
+		}
+		if cut < 0 {
+			return fmt.Errorf("task: failed step %q not found in plan", failedStepID)
+		}
+		t.Plan.Steps = t.Plan.Steps[:cut]
+		if len(t.Plan.Steps) == 0 {
+			t.Plan = &Plan{
+				Steps: make([]*PlanStep, 0),
+			}
+			return nil
+		}
+		last := t.Plan.Steps[len(t.Plan.Steps)-1]
+		n := &last.Node
+		if !n.IsValid() {
+			return fmt.Errorf("task: last plan step has invalid capability/tool")
+		}
 		return nil
 	}
-	last := t.Plan.Steps[len(t.Plan.Steps)-1]
-	n := graph.MakeNode(last.Capability, last.Tool)
-	if !n.IsValid() {
-		return fmt.Errorf("task: last plan step has invalid capability/tool")
-	}
-	t.RouteSnap.LastNode = n
-	t.RouteSnap.LastOut = true
-	return nil
 }
 
 // UserFacingTurnMessages returns chat bubbles: trace-derived Reply first, then TrajectorySummary when present.
 // Raw field values are appended when the trimmed form is non-empty (same as historical Telegram behavior).
 func (t *Task) UserFacingTurnMessages() ([]string, error) {
-	r := strings.TrimSpace(t.Reply)
-	s := strings.TrimSpace(t.TrajectorySummary)
+	reply := strings.ReplaceAll(t.Reply, `\n`, "\n")
+	summary := strings.ReplaceAll(t.TrajectorySummary, `\n`, "\n")
+	r := strings.TrimSpace(reply)
+	s := strings.TrimSpace(summary)
 	if r == "" && s == "" {
 		return nil, fmt.Errorf("task has empty reply")
 	}
 	var out []string
 	if r != "" {
-		out = append(out, t.Reply)
+		out = append(out, reply)
 	}
 	if s != "" {
-		out = append(out, t.TrajectorySummary)
+		out = append(out, summary)
 	}
 	return out, nil
 }
@@ -160,7 +150,7 @@ func (t *Task) RecallPlannerCorpusDocument(p *Plan) string {
 		return ""
 	}
 	var b strings.Builder
-	if ut := strings.TrimSpace(t.UserInput.Text); ut != "" {
+	if ut := strings.TrimSpace(t.UserInput); ut != "" {
 		b.WriteString("用户请求：\n")
 		b.WriteString(ut)
 	}
@@ -170,11 +160,7 @@ func (t *Task) RecallPlannerCorpusDocument(p *Plan) string {
 		}
 		b.WriteString("计划步骤：\n")
 		for _, st := range p.Steps {
-			fmt.Fprintf(&b, "- %s %s [%s", st.ID, st.Goal, st.Capability)
-			if st.Tool != "" {
-				fmt.Fprintf(&b, " tool=%s", st.Tool)
-			}
-			b.WriteString("]\n")
+			fmt.Fprintf(&b, "- %s %s [%s]\n", st.ID, st.Goal, st.Node.String())
 		}
 	}
 	r := strings.TrimSpace(t.Reply)

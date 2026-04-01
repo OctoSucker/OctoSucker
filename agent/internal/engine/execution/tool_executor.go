@@ -16,31 +16,34 @@ type ToolExecutor struct {
 	OnCatalogChanged func(context.Context) error
 }
 
-func (x *ToolExecutor) HandleToolCall(ctx context.Context, evt ports.Event) (*ports.Event, error) {
-	pl := evt.Payload.(ports.PayloadToolCall)
+func (x *ToolExecutor) HandleToolCall(ctx context.Context, pl ports.PayloadToolCall) (*ports.Event, error) {
 	res, err := x.RouteGraph.Invoke(ctx, ports.CapabilityInvocation{
-		CapabilityName: pl.Capability,
-		Tool:           pl.Tool,
+		CapabilityName: pl.Node.Capability,
+		Tool:           pl.Node.Tool,
 		Arguments:      pl.Arguments,
 	})
 	if err != nil {
-		res = ports.ToolResult{OK: false, Err: err}
+		res = ports.ToolResult{Err: err}
 	} else {
-		if res.OK && pl.Capability == skillsbuiltin.CapabilityName &&
-			pl.Tool == skillsbuiltin.ToolReloadSkills &&
+		if pl.Node.Capability == skillsbuiltin.CapabilityName &&
+			pl.Node.Tool == skillsbuiltin.ToolReloadSkills &&
 			x.OnCatalogChanged != nil {
-			if syncErr := x.OnCatalogChanged(ctx); syncErr != nil {
-				log.Printf("tool_executor: OnCatalogChanged after skills reload: %v", syncErr)
+			// retry 2 times
+			for i := 0; i < 2; i++ {
+				if syncErr := x.OnCatalogChanged(ctx); syncErr != nil {
+					log.Printf("tool_executor: OnCatalogChanged after skills reload: %v", syncErr)
+					continue
+				}
+				break
 			}
 		}
 	}
 
-	obs := res.Observation()
 	log.Printf(
-		"tool_executor: invoke done task=%s step=%s capability=%s tool=%s arguments=%v ok=%v err=%v summary=%q, structured=%v",
-		pl.TaskID, pl.StepID, pl.Capability, pl.Tool, pl.Arguments, obs.Err == nil, obs.Err, obs.Summary, obs.Structured,
+		"tool_executor: invoke done task=%s step=%s node=%s arguments=%v result=%v",
+		pl.TaskID, pl.StepID, pl.Node.String(), pl.Arguments, res,
 	)
 	return ports.EventPtr(ports.Event{Type: ports.EvObservationReady, Payload: ports.PayloadObservation{
-		TaskID: pl.TaskID, StepID: pl.StepID, Capability: pl.Capability, Tool: pl.Tool, Obs: obs,
+		TaskID: pl.TaskID, StepID: pl.StepID, Result: res,
 	}}), nil
 }

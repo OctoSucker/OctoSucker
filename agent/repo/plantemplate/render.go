@@ -9,25 +9,31 @@ import (
 )
 
 // RenderPlanStepArguments substitutes {{placeholders}} in the step's argument map (recursively through nested maps and slices).
-func RenderPlanStepArguments(task *ports.Task, stepID string) map[string]any {
+func RenderPlanStepArguments(task *ports.Task, stepID string) (map[string]any, error) {
 	st := task.Plan.FindStep(stepID)
 	if len(st.Arguments) == 0 {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
-	ctx := buildTemplateArgMap(task.UserInput.Text, task.Plan)
+	ctx, err := buildTemplateArgMap(task.UserInput, task.Plan)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[string]any, len(st.Arguments))
 	for k, v := range st.Arguments {
 		out[k] = applyArgTemplates(v, ctx)
 	}
-	return out
+	return out, nil
 }
 
-func buildTemplateArgMap(userInput string, plan *ports.Plan) map[string]any {
+func buildTemplateArgMap(userInput string, plan *ports.Plan) (map[string]any, error) {
 	out := map[string]any{}
 	if s := strings.TrimSpace(userInput); s != "" {
 		out["user_input"] = s
 	}
-	sum := ports.StepSummariesFromPlan(plan)
+	sum, err := ports.StepSummariesFromPlan(plan)
+	if err != nil {
+		return nil, err
+	}
 	for id, txt := range sum {
 		if id == "" || txt == "" {
 			continue
@@ -45,13 +51,17 @@ func buildTemplateArgMap(userInput string, plan *ports.Plan) map[string]any {
 			}
 		}
 	}
-	if lastID, lastText := ports.LastDoneStepPrimary(plan); lastText != "" {
+	lastID, lastText, err := ports.LastDoneStepPrimary(plan)
+	if err != nil {
+		return nil, err
+	}
+	if lastText != "" {
 		out["last"] = lastText
 		if lastID != "" {
 			out["last_step_id"] = lastID
 		}
 	}
-	return out
+	return out, nil
 }
 
 func applyArgTemplates(v any, ctx map[string]any) any {

@@ -129,7 +129,7 @@ func (r *CapabilityRegistry) ResyncToolsFromRunners(ctx context.Context) error {
 func (r *CapabilityRegistry) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
 	runner, ok := r.Runners[inv.CapabilityName]
 	if !ok {
-		return ports.ToolResult{}, fmt.Errorf("capability: no runner for capability %q", inv.CapabilityName)
+		return ports.ToolResult{Err: fmt.Errorf("capability: no runner for capability %q", inv.CapabilityName)}, fmt.Errorf("capability: no runner for capability %q", inv.CapabilityName)
 	}
 	return runner.Invoke(ctx, inv)
 }

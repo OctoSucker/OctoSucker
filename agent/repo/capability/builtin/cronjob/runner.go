@@ -156,13 +156,12 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 	case ToolCreateJob:
 		task, err := parseCreateArgs(inv.Arguments)
 		if err != nil {
-			return ports.ToolResult{}, err
+			return ports.ToolResult{Err: err}, err
 		}
 		if err := r.createTask(task); err != nil {
-			return ports.ToolResult{}, err
+			return ports.ToolResult{Err: err}, err
 		}
 		return ports.ToolResult{
-			OK: true,
 			Output: map[string]any{
 				"created": task.ID,
 				"spec":    task.Spec,
@@ -171,13 +170,12 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 	case ToolDeleteJob:
 		id, err := parseDeleteArgs(inv.Arguments)
 		if err != nil {
-			return ports.ToolResult{}, err
+			return ports.ToolResult{Err: err}, err
 		}
 		if err := r.deleteTask(id); err != nil {
-			return ports.ToolResult{}, err
+			return ports.ToolResult{Err: err}, err
 		}
 		return ports.ToolResult{
-			OK: true,
 			Output: map[string]any{
 				"deleted": id,
 			},
@@ -185,13 +183,12 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 	case ToolListJobs:
 		jobs := r.listTasks()
 		return ports.ToolResult{
-			OK: true,
 			Output: map[string]any{
 				"jobs": jobs,
 			},
 		}, nil
 	default:
-		return ports.ToolResult{}, fmt.Errorf("cronjob builtin: unknown tool %q", inv.Tool)
+		return ports.ToolResult{Err: fmt.Errorf("cronjob builtin: unknown tool %q", inv.Tool)}, fmt.Errorf("cronjob builtin: unknown tool %q", inv.Tool)
 	}
 }
 

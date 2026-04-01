@@ -32,7 +32,7 @@ func NewOpenAI(baseURL, apiKey, model, embeddingModel string) *OpenAI {
 	}
 }
 
-func (c *OpenAI) Complete(ctx context.Context, system string, user string) (string, error) {
+func (c *OpenAI) Complete(ctx context.Context, systemMsg string, userMsg string) (string, error) {
 	if c.Model == "" {
 		return "", fmt.Errorf("llmclient.OpenAI: model required")
 	}
@@ -42,12 +42,12 @@ func (c *OpenAI) Complete(ctx context.Context, system string, user string) (stri
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			{OfSystem: &openai.ChatCompletionSystemMessageParam{
 				Content: openai.ChatCompletionSystemMessageParamContentUnion{
-					OfString: openai.String(system),
+					OfString: openai.String(systemMsg),
 				},
 			}},
 			{OfUser: &openai.ChatCompletionUserMessageParam{
 				Content: openai.ChatCompletionUserMessageParamContentUnion{
-					OfString: openai.String(user),
+					OfString: openai.String(userMsg),
 				},
 			}},
 		},

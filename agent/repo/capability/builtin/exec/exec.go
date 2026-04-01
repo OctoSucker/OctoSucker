@@ -115,7 +115,7 @@ func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
 
 func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
 	if strings.TrimSpace(inv.Tool) != ToolName {
-		return ports.ToolResult{}, fmt.Errorf("exec builtin: tool must be %q", ToolName)
+		return ports.ToolResult{Err: fmt.Errorf("exec builtin: tool must be %q", ToolName)}, fmt.Errorf("exec builtin: tool must be %q", ToolName)
 	}
 	return r.runCommand(ctx, inv.Arguments)
 }
@@ -126,27 +126,27 @@ func (r *Runner) runCommand(ctx context.Context, args map[string]any) (ports.Too
 	}
 	rawProg, ok := args["program"]
 	if !ok {
-		return ports.ToolResult{}, fmt.Errorf("exec builtin: argument \"program\" is required")
+		return ports.ToolResult{Err: fmt.Errorf("exec builtin: argument \"program\" is required")}, fmt.Errorf("exec builtin: argument \"program\" is required")
 	}
 	program, ok := rawProg.(string)
 	if !ok || strings.TrimSpace(program) == "" {
-		return ports.ToolResult{}, fmt.Errorf("exec builtin: argument \"program\" must be non-empty string")
+		return ports.ToolResult{Err: fmt.Errorf("exec builtin: argument \"program\" must be non-empty string")}, fmt.Errorf("exec builtin: argument \"program\" must be non-empty string")
 	}
 	program = strings.TrimSpace(program)
 	extraArgs, err := parseExecArgsSlice(args["args"])
 	if err != nil {
-		return ports.ToolResult{}, err
+		return ports.ToolResult{Err: err}, err
 	}
 
 	wd := r.cfg.roots[0]
 	if rawCWD, ok := args["work_dir"]; ok {
 		cwd, ok := rawCWD.(string)
 		if !ok || strings.TrimSpace(cwd) == "" {
-			return ports.ToolResult{}, fmt.Errorf("exec builtin: argument \"work_dir\" must be non-empty string")
+			return ports.ToolResult{Err: fmt.Errorf("exec builtin: argument \"work_dir\" must be non-empty string")}, fmt.Errorf("exec builtin: argument \"work_dir\" must be non-empty string")
 		}
 		resolved, err := resolveWorkDir(cwd, r.cfg.roots)
 		if err != nil {
-			return ports.ToolResult{}, err
+			return ports.ToolResult{Err: err}, err
 		}
 		wd = resolved
 	}
@@ -156,7 +156,7 @@ func (r *Runner) runCommand(ctx context.Context, args map[string]any) (ports.Too
 	fullCmd := strings.Join(argv, " ")
 	for _, blocked := range r.cfg.blacklist {
 		if blocked != "" && strings.Contains(fullCmd, blocked) {
-			return ports.ToolResult{}, fmt.Errorf("exec builtin: command is forbidden by blacklist: %s", fullCmd)
+			return ports.ToolResult{Err: fmt.Errorf("exec builtin: command is forbidden by blacklist: %s", fullCmd)}, fmt.Errorf("exec builtin: command is forbidden by blacklist: %s", fullCmd)
 		}
 	}
 
@@ -164,7 +164,7 @@ func (r *Runner) runCommand(ctx context.Context, args map[string]any) (ports.Too
 	if rawTimeout, ok := args["timeout_sec"]; ok {
 		timeoutSecParsed, err := parseTimeoutSec(rawTimeout)
 		if err != nil {
-			return ports.ToolResult{}, err
+			return ports.ToolResult{Err: err}, err
 		}
 		timeoutSec = timeoutSecParsed
 	}
@@ -172,7 +172,7 @@ func (r *Runner) runCommand(ctx context.Context, args map[string]any) (ports.Too
 	defer cancel()
 
 	if err := r.ensureSandbox(runCtx); err != nil {
-		return ports.ToolResult{}, err
+		return ports.ToolResult{Err: err}, err
 	}
 	switch r.cfg.backend {
 	case config.ExecBackendDocker:
@@ -180,7 +180,7 @@ func (r *Runner) runCommand(ctx context.Context, args map[string]any) (ports.Too
 	case config.ExecBackendMacOSSandboxExec:
 		return r.runMacOSSandbox(runCtx, wd, program, argv, args)
 	default:
-		return ports.ToolResult{}, fmt.Errorf("exec builtin: unknown backend %q", r.cfg.backend)
+		return ports.ToolResult{Err: fmt.Errorf("exec builtin: unknown backend %q", r.cfg.backend)}, fmt.Errorf("exec builtin: unknown backend %q", r.cfg.backend)
 	}
 }
 
@@ -339,4 +339,19 @@ func exitCodeFromError(err error) int {
 		return ee.ExitCode()
 	}
 	return -1
+}
+
+func formatExecRunError(tool string, err error, stderr string) error {
+	stderr = strings.TrimSpace(stderr)
+	raw := strings.TrimSpace(err.Error())
+	switch {
+	case stderr == "":
+		return fmt.Errorf("exec builtin: %s failed (exit_code=%d): %s", tool, exitCodeFromError(err), raw)
+	case raw == "":
+		return fmt.Errorf("exec builtin: %s failed (exit_code=%d): %s", tool, exitCodeFromError(err), stderr)
+	case strings.Contains(stderr, raw):
+		return fmt.Errorf("exec builtin: %s failed (exit_code=%d): %s", tool, exitCodeFromError(err), stderr)
+	default:
+		return fmt.Errorf("exec builtin: %s failed (exit_code=%d): %s | run error: %s", tool, exitCodeFromError(err), stderr, raw)
+	}
 }

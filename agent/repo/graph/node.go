@@ -13,8 +13,8 @@ const routingNodeSep = "::"
 // JSON is the canonical string "cap::tool", or "" for entry.
 // Construction and string encoding for this type are MakeNode and ParseNode in this file.
 type Node struct {
-	Capability string `json:"-"`
-	Tool       string `json:"-"`
+	Capability string `json:"capability"`
+	Tool       string `json:"tool"`
 }
 
 // IsEntry reports whether n is the synthetic entry vertex.
@@ -28,8 +28,8 @@ func (n Node) IsValid() bool {
 }
 
 // MakeNode builds a vertex from capability and tool strings.
-func MakeNode(capability, tool string) Node {
-	return Node{Capability: capability, Tool: tool}
+func MakeNode(capability, tool string) *Node {
+	return &Node{Capability: capability, Tool: tool}
 }
 
 // String returns the canonical id (cap::tool), or "" for the entry vertex.
