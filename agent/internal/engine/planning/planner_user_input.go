@@ -14,10 +14,9 @@ func (p *Planner) HandleUserInput(ctx context.Context, pl ports.PayloadUserInput
 	if err != nil {
 		return nil, err
 	}
-	if task.RouteSnap != nil {
-		task.RouteSnap.UserInput = pl.Text
+	if task.UserInput == "" {
+		task.UserInput = pl.Text
 	}
-	task.RouteSnap = nil
 
 	var buildPlan *ports.Plan
 	var lastStep *ports.PlanStep
@@ -28,21 +27,11 @@ func (p *Planner) HandleUserInput(ctx context.Context, pl ports.PayloadUserInput
 	}
 	g := p.RouteGraph.Confidence(ctx, pl.Text, lastNode)
 	if g >= graphRouteThreshold {
-		task.RouteSnap = &ports.RouteSnap{
-			RouteType:  ports.RouteTypeGraphConfidence,
-			UserInput:  pl.Text,
-			Confidence: g,
-		}
 		buildPlan, err = p.buildGraphPlan(ctx, pl.TaskID, task, pl)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		task.RouteSnap = &ports.RouteSnap{
-			RouteType:  ports.RouteTypeHeuristicComplexRequest,
-			UserInput:  pl.Text,
-			Confidence: 0.05,
-		}
 		buildPlan, err = p.buildLLMPlan(ctx, pl.TaskID, task, lastStep.PrimaryText())
 		if err != nil {
 			return nil, err

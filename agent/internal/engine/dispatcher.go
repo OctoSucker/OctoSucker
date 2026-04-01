@@ -132,9 +132,6 @@ func (d *Dispatcher) Run(ctx context.Context, event ports.Event) error {
 	return d.persistEmptyTurnIfNeeded(evt)
 }
 
-// persistEmptyTurnIfNeeded runs when the dispatcher stops only because MaxSteps was reached while
-// another event was still queued. Without this, Task.Reply and TrajectorySummary can both stay empty
-// and UserFacingTurnMessages fails even though the run "succeeded".
 func (d *Dispatcher) persistEmptyTurnIfNeeded(nextEvt ports.Event) error {
 	tid, ok := ports.TaskIDFromEvent(nextEvt)
 	if !ok {

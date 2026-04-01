@@ -16,7 +16,10 @@ type ToolResult struct {
 // so string leaves lose decorative CLI borders, then the result is JSON (indented when
 // possible) or plain text, truncated to PrimaryTextMaxRunes. Err is ignored.
 // Nil Output yields "", nil.
-func (res ToolResult) CompactForLLM() string {
+func (res *ToolResult) CompactForLLM() string {
+	if res == nil {
+		return ""
+	}
 	if res.Err != nil {
 		return res.Err.Error()
 	}

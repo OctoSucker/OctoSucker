@@ -16,10 +16,7 @@ const (
 )
 
 // RouteSnap carries routing context for execution-time decisions.
-// LastNode points to graph.Node (JSON: canonical cap::tool strings); nil means no last node.
-// LastOut is whether the last recorded hop succeeded (true after fresh plan / reset; false after a failed tool observation).
 type RouteSnap struct {
-	UserInput  string    `json:"user_input,omitempty"`
 	RouteType  RouteType `json:"route_type"`
 	Confidence float64   `json:"confidence"`
 }
@@ -32,9 +29,6 @@ type Task struct {
 	// --- 贯穿多阶段：标识、本轮用户原文、当前计划（Planner 写入 Plan；执行与评判改写步骤状态）---
 	ID        string `json:"id"` // UUID；SQLite PRIMARY KEY
 	UserInput string `json:"user_input"`
-
-	// --- EvUserInput（Planner）：路由快照与技能先验；之后 PlanExec（RouteSnap）与 StepCritic 读取 ---
-	RouteSnap *RouteSnap `json:"route_snap,omitempty"`
 
 	Plan *Plan `json:"plan,omitempty"`
 
@@ -69,9 +63,6 @@ func NewTaskIDFromSeed(seed string) string {
 //   - failedStepID non-empty (StepCritic): remove that step and all following; keep prefix. Empty prefix clears plan and resets RouteSnap to entry.
 //   - failedStepID empty (TrajectoryCritic): discard the entire plan and reset RouteSnap to entry (full replan). StepCritic must pass a concrete step id.
 func (t *Task) TruncatePlanFromStep(failedStepID string) error {
-	if t.RouteSnap == nil {
-		return fmt.Errorf("task: nil RouteSnap")
-	}
 	if failedStepID == "" {
 		t.Plan = &Plan{
 			Steps: make([]*PlanStep, 0),

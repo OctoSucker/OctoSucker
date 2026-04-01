@@ -8,10 +8,6 @@ import (
 
 const routingNodeSep = "::"
 
-// Node is one routing-graph vertex: a capability plus MCP tool name.
-// The zero value is the synthetic entry vertex (before any tool); it is not a valid cap::tool pair.
-// JSON is the canonical string "cap::tool", or "" for entry.
-// Construction and string encoding for this type are MakeNode and ParseNode in this file.
 type Node struct {
 	Capability string `json:"capability"`
 	Tool       string `json:"tool"`
@@ -50,23 +46,6 @@ func ParseNode(s string) (Node, bool) {
 		return Node{}, false
 	}
 	return Node{Capability: parts[0], Tool: parts[1]}, true
-}
-
-func (n Node) MarshalJSON() ([]byte, error) {
-	return json.Marshal(n.String())
-}
-
-func (n *Node) UnmarshalJSON(b []byte) error {
-	var s string
-	if err := json.Unmarshal(b, &s); err != nil {
-		return err
-	}
-	parsed, ok := ParseNode(s)
-	if !ok {
-		return fmt.Errorf("graph: invalid node string %q", s)
-	}
-	*n = parsed
-	return nil
 }
 
 // RoutePath is a sequence of routing vertices. JSON is a string array of canonical ids.

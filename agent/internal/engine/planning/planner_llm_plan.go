@@ -11,17 +11,16 @@ import (
 )
 
 func (p *Planner) buildLLMPlan(ctx context.Context, taskID string, task *ports.Task, failureSummary string) (*ports.Plan, error) {
-
 	systemPrompt, userRequest, err := p.buildPlannerSystemPrompt(ctx, task, failureSummary)
 	if err != nil {
 		return nil, fmt.Errorf("planner: system prompt: %w", err)
 	}
+
 	var x llmPlanResponse
 	if err := p.PlannerLLM.CompleteJSON(ctx, systemPrompt, userRequest, &x); err != nil {
 		log.Printf("engine.Dispatcher: plan JSON parse failed task=%s err=%v", taskID, err)
 		return nil, fmt.Errorf("planner: llm plan json: %w", err)
 	}
-	log.Printf("------planner: llm plan response: %+v", x)
 	if len(x.Steps) == 0 {
 		log.Printf("engine.Dispatcher: plan JSON had empty steps task=%s", taskID)
 		return nil, fmt.Errorf("planner: llm returned no steps (at least one step is required)")

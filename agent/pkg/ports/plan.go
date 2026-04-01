@@ -2,7 +2,6 @@ package ports
 
 import (
 	"maps"
-	"strings"
 
 	"github.com/OctoSucker/agent/repo/graph"
 )
@@ -50,24 +49,17 @@ type PlanStep struct {
 
 // PrimaryText is the same as ToolResult.CompactForLLM for this step’s stored tool output.
 func (s *PlanStep) PrimaryText() string {
+	if s == nil {
+		return ""
+	}
+
 	out := s.ToolResult.CompactForLLM()
 	return out
 }
 
 // UserReplyFromPlan concatenates non-empty PrimaryText from each done step in plan order.
 func UserReplyFromPlan(p *Plan) (string, error) {
-	var b strings.Builder
-	for _, st := range p.Steps {
-		if st.Status != "done" {
-			continue
-		}
-		txt := st.PrimaryText()
-		if txt != "" {
-			b.WriteString(txt)
-			b.WriteString("\n")
-		}
-	}
-	return strings.TrimSpace(b.String()), nil
+	return p.Steps[len(p.Steps)-1].PrimaryText(), nil
 }
 
 // StepSummariesFromPlan maps done step id → PrimaryText for template substitution.
