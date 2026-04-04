@@ -7,10 +7,12 @@ import (
 	"strings"
 
 	"github.com/OctoSucker/agent/internal/config"
+	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
 	catalogbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/catalog"
 	cronjobbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/cronjob"
 	execbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/exec"
+	kggraph "github.com/OctoSucker/agent/repo/capability/builtin/kg_graph"
 	skillsbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/skills"
 	telegrambuiltin "github.com/OctoSucker/agent/repo/capability/builtin/telegram"
 	mcpstore "github.com/OctoSucker/agent/repo/capability/mcp"
@@ -30,6 +32,7 @@ func NewCapabilityRegistry(
 	telegramCfg config.Telegram,
 	skillsRunner *skillsbuiltin.Runner,
 	catalogRunner *catalogbuiltin.Runner,
+	embedLLM *llmclient.OpenAI,
 ) (*CapabilityRegistry, error) {
 
 	r := &CapabilityRegistry{
@@ -71,6 +74,15 @@ func NewCapabilityRegistry(
 		return nil, fmt.Errorf("capability: cronjob builtin: %w", err)
 	}
 	r.Runners[cronjobbuiltin.CapabilityName] = cronjobRunner
+
+	if embedLLM == nil {
+		return nil, fmt.Errorf("capability: embed llm is required for kg_graph")
+	}
+	kgRunner, err := kggraph.NewRunner(execCfg.WorkspaceDirs[0], embedLLM)
+	if err != nil {
+		return nil, fmt.Errorf("capability: kg_graph builtin: %w", err)
+	}
+	r.Runners[kggraph.CapabilityName] = kgRunner
 
 	// register mcp capabilities
 	for _, ep := range mcpEndpoints {

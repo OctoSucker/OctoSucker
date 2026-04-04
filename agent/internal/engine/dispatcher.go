@@ -14,7 +14,6 @@ import (
 	"github.com/OctoSucker/agent/model"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
-	"github.com/OctoSucker/agent/repo/recall"
 	routinggraph "github.com/OctoSucker/agent/repo/routing_graph"
 	"github.com/OctoSucker/agent/repo/task"
 )
@@ -42,21 +41,15 @@ func NewDispatcher(
 	}
 
 	plannerLLM := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
-	embedder := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
 	trajectoryLLM := llmclient.NewOpenAI(openai.BaseURL, openai.APIKey, openai.Model, openai.EmbeddingModel)
 	routeGraph, err := routinggraph.New(ctx, mcpEndpoints, execCfg, telegramCfg, skillsDir, plannerLLM, data)
 	if err != nil {
 		return nil, fmt.Errorf("dispatcher: routing graph: %w", err)
 	}
-	recallCorpus, err := recall.NewRecallCorpus(embedder, data)
-	if err != nil {
-		return nil, fmt.Errorf("dispatcher: recall corpus: %w", err)
-	}
 
 	planner, err := planning.NewPlanner(
 		taskStore,
 		routeGraph,
-		recallCorpus,
 		plannerLLM,
 	)
 	if err != nil {
@@ -69,7 +62,6 @@ func NewDispatcher(
 			taskStore,
 			routeGraph,
 			trajectoryLLM,
-			recallCorpus,
 		),
 	}
 	execAgent := execution.NewAgentExecutor(taskStore, routeGraph)

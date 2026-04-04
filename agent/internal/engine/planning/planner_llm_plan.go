@@ -11,7 +11,7 @@ import (
 )
 
 func (p *Planner) buildLLMPlan(ctx context.Context, taskID string, task *ports.Task, failureSummary string) (*ports.Plan, error) {
-	systemPrompt, userRequest, err := p.buildPlannerSystemPrompt(ctx, task, failureSummary)
+	systemPrompt, userRequest, err := p.buildPlannerSystemPrompt(task, failureSummary)
 	if err != nil {
 		return nil, fmt.Errorf("planner: system prompt: %w", err)
 	}
@@ -46,7 +46,7 @@ func (p *Planner) buildLLMPlan(ctx context.Context, taskID string, task *ports.T
 	return parsed, nil
 }
 
-func (p *Planner) buildPlannerSystemPrompt(ctx context.Context, task *ports.Task, failureSummary string) (string, string, error) {
+func (p *Planner) buildPlannerSystemPrompt(task *ports.Task, failureSummary string) (string, string, error) {
 
 	const systemPrompt = `
 You are the planning module of an AI agent.
@@ -127,12 +127,6 @@ SELF CHECK BEFORE OUTPUT
 	if err != nil {
 		return "", "", err
 	}
-	userHistory, err := p.RecallCorpus.RecallUserHistory(ctx, task.UserInput, 5)
-	if err != nil {
-		log.Printf("engine.Dispatcher: recall failed err=%v", err)
-		return "", "", fmt.Errorf("planner: recall: %w", err)
-	}
-
 	userPrompt := fmt.Sprintf(`
 	[USER GOAL]
 	%s
@@ -146,15 +140,11 @@ SELF CHECK BEFORE OUTPUT
 	%s
 	
 	----------------------------------------
-	[USER HISTORY]
-	%s
-	
-	----------------------------------------
 	[LAST TOOL ERROR]
 	%s
 	
 	Generate a new plan.
-	`, task.UserInput, skillsAppendix, toolsAppendix, userHistory, failureSummary)
+	`, task.UserInput, skillsAppendix, toolsAppendix, failureSummary)
 
 	return systemPrompt, userPrompt, nil
 }

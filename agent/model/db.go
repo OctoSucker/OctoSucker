@@ -86,15 +86,40 @@ func (a *AgentDB) migrate() error {
 			v TEXT NOT NULL
 		)`, TableRoutingMeta),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			text TEXT NOT NULL,
+			id TEXT NOT NULL PRIMARY KEY,
 			embedding BLOB
-		)`, TableRecallChunks),
+		)`, TableKnowledgeGraphNodes),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+			from_id TEXT NOT NULL,
+			to_id TEXT NOT NULL,
+			positive INTEGER NOT NULL,
+			PRIMARY KEY (from_id, to_id),
+			FOREIGN KEY (from_id) REFERENCES %s(id),
+			FOREIGN KEY (to_id) REFERENCES %s(id)
+		)`, TableKnowledgeGraphEdges, TableKnowledgeGraphNodes, TableKnowledgeGraphNodes),
 	}
 	for _, q := range stmts {
 		if _, err := a.DB.Exec(q); err != nil {
 			return fmt.Errorf("model migrate: %w", err)
 		}
+	}
+	if _, err := a.DB.Exec(`DROP TABLE IF EXISTS kg_node_aliases`); err != nil {
+		return fmt.Errorf("model migrate: drop legacy kg_node_aliases: %w", err)
+	}
+	return a.migrateKnowledgeGraphNodeEmbeddingColumn()
+}
+
+func (a *AgentDB) migrateKnowledgeGraphNodeEmbeddingColumn() error {
+	var cnt int
+	q := fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info(%q) WHERE name = 'embedding'`, TableKnowledgeGraphNodes)
+	if err := a.DB.QueryRow(q).Scan(&cnt); err != nil {
+		return fmt.Errorf("model migrate kg_node embedding pragma: %w", err)
+	}
+	if cnt > 0 {
+		return nil
+	}
+	if _, err := a.DB.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN embedding BLOB`, TableKnowledgeGraphNodes)); err != nil {
+		return fmt.Errorf("model migrate kg_node add embedding: %w", err)
 	}
 	return nil
 }

@@ -32,7 +32,7 @@ type Task struct {
 
 	Plan *Plan `json:"plan,omitempty"`
 
-	// --- EvTrajectoryCheck（TrajectoryCritic）：LLM 判定是否达成用户目标；达成则写 Reply / 分数字段、recall、total_runs；未达成则清空计划并 EvUserInput 续写重规划。ReplanCount 与 StepCritic 触发的 PlannerContinuation 共享同一「每回合重规划次数」上限。---
+	// --- EvTrajectoryCheck（TrajectoryCritic）：LLM 判定是否达成用户目标；达成则写 Reply / 分数字段、total_runs；未达成则清空计划并 EvUserInput 续写重规划。ReplanCount 与 StepCritic 触发的 PlannerContinuation 共享同一「每回合重规划次数」上限。---
 	// Reply：由各 done 步 PlanStep 的观测合成（UserReplyFromPlan），表示工具侧产出，不是评判文案。
 	Reply string `json:"reply"`
 	// TrajectorySummary：轨迹评判正文——规则生成的 baseMsg（步数/成功率等）+ LLM 点评；与用户可见「执行结果」Reply 分离。
@@ -116,59 +116,4 @@ func (t *Task) UserFacingTurnMessages() ([]string, error) {
 		out = append(out, summary)
 	}
 	return out, nil
-}
-
-// UserFacingRecallDocument merges Reply and TrajectorySummary for recall (trimmed, "\n\n" between).
-func (t *Task) UserFacingRecallDocument() string {
-	r := strings.TrimSpace(t.Reply)
-	s := strings.TrimSpace(t.TrajectorySummary)
-	switch {
-	case r == "" && s == "":
-		return ""
-	case s == "":
-		return r
-	case r == "":
-		return s
-	default:
-		return r + "\n\n" + s
-	}
-}
-
-// RecallPlannerCorpusDocument builds recall text aligned with PlannerUserContent: user request, plan outline,
-// tool outputs, and trajectory rationale so retrieval matches future user queries at plan time.
-func (t *Task) RecallPlannerCorpusDocument(p *Plan) string {
-	if t == nil {
-		return ""
-	}
-	var b strings.Builder
-	if ut := strings.TrimSpace(t.UserInput); ut != "" {
-		b.WriteString("用户请求：\n")
-		b.WriteString(ut)
-	}
-	if p != nil && len(p.Steps) > 0 {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString("计划步骤：\n")
-		for _, st := range p.Steps {
-			fmt.Fprintf(&b, "- %s %s [%s]\n", st.ID, st.Goal, st.Node.String())
-		}
-	}
-	r := strings.TrimSpace(t.Reply)
-	s := strings.TrimSpace(t.TrajectorySummary)
-	if r != "" {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString("工具输出：\n")
-		b.WriteString(r)
-	}
-	if s != "" {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString("轨迹评判：\n")
-		b.WriteString(s)
-	}
-	return strings.TrimSpace(b.String())
 }

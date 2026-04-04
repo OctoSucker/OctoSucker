@@ -34,7 +34,7 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("routinggraph: catalog runner: %w", err)
 	}
-	reg, err := capability.NewCapabilityRegistry(ctx, mcpEndpoints, execCfg, telegramCfg, skillRunner, catalogRunner)
+	reg, err := capability.NewCapabilityRegistry(ctx, mcpEndpoints, execCfg, telegramCfg, skillRunner, catalogRunner, plannerLLM)
 	if err != nil {
 		return nil, fmt.Errorf("routinggraph: capability registry: %w", err)
 	}

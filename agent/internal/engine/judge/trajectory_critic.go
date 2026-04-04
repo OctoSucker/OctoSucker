@@ -7,7 +7,6 @@ import (
 
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
-	"github.com/OctoSucker/agent/repo/recall"
 	routinggraph "github.com/OctoSucker/agent/repo/routing_graph"
 	"github.com/OctoSucker/agent/repo/task"
 )
@@ -17,12 +16,11 @@ const maxReplansPerTurn = 5
 type TrajectoryCritic struct {
 	Tasks         *task.TaskStore
 	RouteGraph    *routinggraph.RoutingGraph
-	Recall        *recall.RecallCorpus
 	TrajectoryLLM *llmclient.OpenAI
 }
 
-func NewTrajectoryCritic(tasks *task.TaskStore, routeGraph *routinggraph.RoutingGraph, recallCorpus *recall.RecallCorpus, trajectoryLLM *llmclient.OpenAI) *TrajectoryCritic {
-	return &TrajectoryCritic{Tasks: tasks, RouteGraph: routeGraph, Recall: recallCorpus, TrajectoryLLM: trajectoryLLM}
+func NewTrajectoryCritic(tasks *task.TaskStore, routeGraph *routinggraph.RoutingGraph, trajectoryLLM *llmclient.OpenAI) *TrajectoryCritic {
+	return &TrajectoryCritic{Tasks: tasks, RouteGraph: routeGraph, TrajectoryLLM: trajectoryLLM}
 }
 
 func (c *TrajectoryCritic) HandleTrajectoryCheck(ctx context.Context, pl ports.PayloadTrajectoryCheck) (*ports.Event, error) {
@@ -67,11 +65,6 @@ func (c *TrajectoryCritic) HandleTrajectoryCheck(ctx context.Context, pl ports.P
 		task.ReplanCount = 0
 		if err := c.RouteGraph.IncTotalRunsAndPersist(); err != nil {
 			return nil, fmt.Errorf("trajectory_critic: total runs: %w", err)
-		}
-		if doc := task.RecallPlannerCorpusDocument(task.Plan); doc != "" {
-			if err := c.Recall.Write(ctx, doc); err != nil {
-				return nil, fmt.Errorf("trajectory_critic: recall write: %w", err)
-			}
 		}
 		if err := c.Tasks.Put(task); err != nil {
 			return nil, err

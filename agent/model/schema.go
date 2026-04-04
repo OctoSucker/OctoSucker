@@ -3,8 +3,9 @@ package model
 
 // Table names — single source of truth for migrations and queries.
 const (
-	TableTasks        = "tasks"
-	TableRoutingEdges = "routing_edges"
-	TableRoutingMeta  = "routing_meta"
-	TableRecallChunks = "recall_chunks"
+	TableTasks               = "tasks"
+	TableRoutingEdges        = "routing_edges"
+	TableRoutingMeta         = "routing_meta"
+	TableKnowledgeGraphNodes = "kg_nodes"
+	TableKnowledgeGraphEdges = "kg_edges"
 )
