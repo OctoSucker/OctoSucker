@@ -10,7 +10,7 @@ import (
 
 func routingEdgeRow(k Key, e *EdgeStat) model.RoutingEdgeRow {
 	return model.RoutingEdgeRow{
-		FromCap: k.From.String(), ToCap: k.To.String(),
+		FromTool: k.From.String(), ToTool: k.To.String(),
 		Success: e.Success, Failure: e.Failure, Cost: e.Cost, Latency: e.Latency,
 	}
 }
@@ -23,10 +23,10 @@ func (g *Graph) LoadFromDB() error {
 	}
 	edges := make(map[Key]*EdgeStat, len(edgeRows))
 	for _, r := range edgeRows {
-		fromN, ok1 := ParseNode(r.FromCap)
-		toN, ok2 := ParseNode(r.ToCap)
+		fromN, ok1 := ParseNode(r.FromTool)
+		toN, ok2 := ParseNode(r.ToTool)
 		if !ok1 || !ok2 || !toN.IsValid() {
-			return fmt.Errorf("graph: routing edge invalid from %q to %q", r.FromCap, r.ToCap)
+			return fmt.Errorf("graph: routing edge invalid from %q to %q", r.FromTool, r.ToTool)
 		}
 		k := Key{From: fromN, To: toN}
 		edges[k] = &EdgeStat{Success: r.Success, Failure: r.Failure, Cost: r.Cost, Latency: r.Latency}

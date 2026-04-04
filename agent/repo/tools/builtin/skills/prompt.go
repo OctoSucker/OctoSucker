@@ -16,7 +16,7 @@ func (b *PromptBundle) FormatPromptAppendix() string {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("Skills (markdown under skills root; load bodies with capability=skills tool read_skill using pagination):\n")
+	sb.WriteString("Skills (markdown under skills root; load bodies with tool read_skill using pagination):\n")
 	if b.RootDir != "" {
 		sb.WriteString("Skills root directory: ")
 		sb.WriteString(b.RootDir)

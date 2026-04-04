@@ -73,13 +73,13 @@ func (a *AgentDB) migrate() error {
 			payload TEXT NOT NULL
 		)`, TableTasks),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-			from_cap TEXT NOT NULL,
-			to_cap TEXT NOT NULL,
+			from_tool TEXT NOT NULL,
+			to_tool TEXT NOT NULL,
 			success REAL NOT NULL DEFAULT 0,
 			failure REAL NOT NULL DEFAULT 0,
 			cost REAL NOT NULL DEFAULT 0,
 			latency REAL NOT NULL DEFAULT 0,
-			PRIMARY KEY (from_cap, to_cap)
+			PRIMARY KEY (from_tool, to_tool)
 		)`, TableRoutingEdges),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			k TEXT PRIMARY KEY,
@@ -106,7 +106,33 @@ func (a *AgentDB) migrate() error {
 	if _, err := a.DB.Exec(`DROP TABLE IF EXISTS kg_node_aliases`); err != nil {
 		return fmt.Errorf("model migrate: drop legacy kg_node_aliases: %w", err)
 	}
+	if err := a.migrateRoutingEdgesToolColumns(); err != nil {
+		return err
+	}
 	return a.migrateKnowledgeGraphNodeEmbeddingColumn()
+}
+
+// migrateRoutingEdgesToolColumns renames legacy from_cap/to_cap to from_tool/to_tool (SQLite 3.25+).
+func (a *AgentDB) migrateRoutingEdgesToolColumns() error {
+	var oldFrom, newFrom int
+	qOld := fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info(%q) WHERE name = 'from_cap'`, TableRoutingEdges)
+	if err := a.DB.QueryRow(qOld).Scan(&oldFrom); err != nil {
+		return fmt.Errorf("model migrate routing_edges pragma from_cap: %w", err)
+	}
+	qNew := fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info(%q) WHERE name = 'from_tool'`, TableRoutingEdges)
+	if err := a.DB.QueryRow(qNew).Scan(&newFrom); err != nil {
+		return fmt.Errorf("model migrate routing_edges pragma from_tool: %w", err)
+	}
+	if oldFrom == 0 || newFrom > 0 {
+		return nil
+	}
+	if _, err := a.DB.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN from_cap TO from_tool`, TableRoutingEdges)); err != nil {
+		return fmt.Errorf("model migrate routing_edges rename from_cap: %w", err)
+	}
+	if _, err := a.DB.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN to_cap TO to_tool`, TableRoutingEdges)); err != nil {
+		return fmt.Errorf("model migrate routing_edges rename to_cap: %w", err)
+	}
+	return nil
 }
 
 func (a *AgentDB) migrateKnowledgeGraphNodeEmbeddingColumn() error {

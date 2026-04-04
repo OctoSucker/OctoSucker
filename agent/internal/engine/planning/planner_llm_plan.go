@@ -6,7 +6,7 @@ import (
 	"log"
 
 	"github.com/OctoSucker/agent/pkg/ports"
-	"github.com/OctoSucker/agent/repo/capability/mcp"
+	"github.com/OctoSucker/agent/repo/tools/mcp"
 	"github.com/google/uuid"
 )
 
@@ -28,7 +28,7 @@ func (p *Planner) buildLLMPlan(ctx context.Context, taskID string, task *ports.T
 
 	parsed := &ports.Plan{}
 	for _, st := range x.Steps {
-		t, err := p.RouteGraph.Tool(st.Node.Capability, st.Node.Tool)
+		t, err := p.RouteGraph.Tool(st.Node.Tool)
 		if err != nil {
 			return nil, fmt.Errorf("planner: tool: %w", err)
 		}
@@ -51,7 +51,7 @@ func (p *Planner) buildPlannerSystemPrompt(task *ports.Task, failureSummary stri
 	const systemPrompt = `
 You are the planning module of an AI agent.
 
-Your job is to generate a plan to achieve the user's goal by calling capability tools.
+Your job is to generate a plan to achieve the user's goal by calling tools.
 
 You are NOT chatting.
 You are NOT executing tools.
@@ -63,8 +63,8 @@ PLANNING RULES
 1. The plan must achieve the user's goal
 2. Steps are executed in order
 3. Each step must call exactly one tool
-4. Use only provided capabilities and tools
-5. Do NOT invent capabilities or tools
+4. Use only tools listed under AVAILABLE TOOLS (copy the tool id string exactly)
+5. Do NOT invent tool ids
 6. Keep the plan minimal but complete
 7. goal describes the outcome, NOT the command
 8. arguments must match the tool parameter schema
@@ -72,11 +72,13 @@ PLANNING RULES
 --------------------------------------------------
 NODE FORMAT (VERY IMPORTANT)
 
-Each step must contain a node object:
+Each step must contain a node object with a single field:
+- tool: the exact tool name string from AVAILABLE TOOLS (one flat name, no prefixes)
+
 --------------------------------------------------
 EXEC TOOL RULES
 
-For exec capability:
+For the run_command tool (when present):
 
 - arguments.program must be the executable (git, npm, etc.)
 - Use "sh" ONLY when necessary
@@ -94,8 +96,7 @@ Return exactly one JSON object:
     {
       "goal": "string",
       "node": {
-        "capability": "string",
-        "tool": "string"
+        "tool": "tool_name_from_appendix"
       },
       "arguments": {}
     }
@@ -113,8 +114,7 @@ SELF CHECK BEFORE OUTPUT
 
 - JSON is valid
 - Each step has goal, node, arguments
-- node.capability exists
-- node.tool exists
+- node.tool is copied exactly from AVAILABLE TOOLS
 - arguments is an object
 - The plan actually helps achieve the user's goal
 `
@@ -136,7 +136,7 @@ SELF CHECK BEFORE OUTPUT
 	%s
 	
 	----------------------------------------
-	[AVAILABLE CAPABILITIES AND TOOLS]
+	[AVAILABLE TOOLS]
 	%s
 	
 	----------------------------------------

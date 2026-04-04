@@ -6,8 +6,6 @@ import (
 	"github.com/OctoSucker/agent/internal/config"
 )
 
-const CapabilityName = "telegram"
-
 type Config struct {
 	Token       string
 	DefaultChat int64

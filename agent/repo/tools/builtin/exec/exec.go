@@ -15,10 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// CapabilityName is the stable registry and planner ID for this builtin (backend is chosen at deploy time).
-const CapabilityName = "exec"
-
-// ToolName is the single MCP tool for this capability; the executable name is arguments.program.
+// ToolName is the single MCP tool for this builtin; the executable name is arguments.program.
 const ToolName = "run_command"
 
 type Runner struct {
@@ -90,8 +87,9 @@ func NewRunner(execCfg config.Exec) (*Runner, error) {
 	return &Runner{cfg: rc}, nil
 }
 
+// Name is the ToolRegistry.Backends map key for this provider (not a user-facing tool id).
 func (r *Runner) Name() string {
-	return CapabilityName
+	return "exec"
 }
 
 func (r *Runner) HasTool(name string) bool {
@@ -113,11 +111,11 @@ func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
 	}, nil
 }
 
-func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
-	if strings.TrimSpace(inv.Tool) != ToolName {
+func (r *Runner) Invoke(ctx context.Context, localTool string, arguments map[string]any) (ports.ToolResult, error) {
+	if strings.TrimSpace(localTool) != ToolName {
 		return ports.ToolResult{Err: fmt.Errorf("exec builtin: tool must be %q", ToolName)}, fmt.Errorf("exec builtin: tool must be %q", ToolName)
 	}
-	return r.runCommand(ctx, inv.Arguments)
+	return r.runCommand(ctx, arguments)
 }
 
 func (r *Runner) runCommand(ctx context.Context, args map[string]any) (ports.ToolResult, error) {

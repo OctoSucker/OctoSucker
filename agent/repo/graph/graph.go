@@ -52,7 +52,7 @@ func cloneStatic(m map[Node][]*Node) map[Node][]*Node {
 	return out
 }
 
-// ReplaceStatic replaces the static adjacency map (e.g. after capability resync).
+// ReplaceStatic replaces the static adjacency map (e.g. after tool list resync).
 func (g *Graph) ReplaceStatic(static map[Node][]*Node) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

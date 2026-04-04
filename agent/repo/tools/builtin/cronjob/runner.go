@@ -18,10 +18,9 @@ import (
 )
 
 const (
-	CapabilityName = "cronjob"
-	ToolCreateJob  = "create_cronjob"
-	ToolDeleteJob  = "delete_cronjob"
-	ToolListJobs   = "list_cronjobs"
+	ToolCreateJob = "create_cronjob"
+	ToolDeleteJob = "delete_cronjob"
+	ToolListJobs  = "list_cronjobs"
 )
 
 type Task struct {
@@ -75,7 +74,8 @@ func NewRunner(workspaceDir string) (*Runner, error) {
 	return r, nil
 }
 
-func (r *Runner) Name() string { return CapabilityName }
+// Name is the ToolRegistry.Backends map key for this provider (not a user-facing tool id).
+func (r *Runner) Name() string { return "cronjob" }
 
 func (r *Runner) HasTool(name string) bool {
 	switch strings.TrimSpace(name) {
@@ -151,10 +151,10 @@ func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
 	return nil, fmt.Errorf("cronjob builtin: unknown tool %q", tool)
 }
 
-func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
-	switch inv.Tool {
+func (r *Runner) Invoke(ctx context.Context, localTool string, arguments map[string]any) (ports.ToolResult, error) {
+	switch localTool {
 	case ToolCreateJob:
-		task, err := parseCreateArgs(inv.Arguments)
+		task, err := parseCreateArgs(arguments)
 		if err != nil {
 			return ports.ToolResult{Err: err}, err
 		}
@@ -168,7 +168,7 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 			},
 		}, nil
 	case ToolDeleteJob:
-		id, err := parseDeleteArgs(inv.Arguments)
+		id, err := parseDeleteArgs(arguments)
 		if err != nil {
 			return ports.ToolResult{Err: err}, err
 		}
@@ -188,7 +188,7 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 			},
 		}, nil
 	default:
-		return ports.ToolResult{Err: fmt.Errorf("cronjob builtin: unknown tool %q", inv.Tool)}, fmt.Errorf("cronjob builtin: unknown tool %q", inv.Tool)
+		return ports.ToolResult{Err: fmt.Errorf("cronjob builtin: unknown tool %q", localTool)}, fmt.Errorf("cronjob builtin: unknown tool %q", localTool)
 	}
 }
 

@@ -92,7 +92,7 @@ func (t *Task) TruncatePlanFromStep(failedStepID string) error {
 		last := t.Plan.Steps[len(t.Plan.Steps)-1]
 		n := &last.Node
 		if !n.IsValid() {
-			return fmt.Errorf("task: last plan step has invalid capability/tool")
+			return fmt.Errorf("task: last plan step has invalid tool id")
 		}
 		return nil
 	}

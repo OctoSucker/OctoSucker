@@ -9,14 +9,14 @@ import (
 	"github.com/OctoSucker/agent/model"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
-	"github.com/OctoSucker/agent/repo/capability"
-	catalogbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/catalog"
-	skillsbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/skills"
+	"github.com/OctoSucker/agent/repo/tools"
+	catalogbuiltin "github.com/OctoSucker/agent/repo/tools/builtin/catalog"
+	skillsbuiltin "github.com/OctoSucker/agent/repo/tools/builtin/skills"
 	"github.com/OctoSucker/agent/repo/graph"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// New loads capabilities from runners, scans on-disk skills (*.md), resyncs registry tool lists, and builds static topology + SQLite-backed edge state.
+// New loads tool runners, scans on-disk skills (*.md), resyncs the tool registry, and builds static topology + SQLite-backed edge state.
 func New(
 	ctx context.Context,
 	mcpEndpoints []string,
@@ -34,14 +34,14 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("routinggraph: catalog runner: %w", err)
 	}
-	reg, err := capability.NewCapabilityRegistry(ctx, mcpEndpoints, execCfg, telegramCfg, skillRunner, catalogRunner, plannerLLM)
+	reg, err := tools.NewToolRegistry(ctx, mcpEndpoints, execCfg, telegramCfg, skillRunner, catalogRunner, plannerLLM)
 	if err != nil {
-		return nil, fmt.Errorf("routinggraph: capability registry: %w", err)
+		return nil, fmt.Errorf("routinggraph: tool registry: %w", err)
 	}
-	if err := reg.ResyncToolsFromRunners(ctx); err != nil {
+	if err := reg.ResyncToolsFromBackends(ctx); err != nil {
 		return nil, fmt.Errorf("routinggraph: resync tools: %w", err)
 	}
-	static := staticAdjacencyFromCapabilities(reg.AllCapabilities())
+	static := staticAdjacencyFromToolIDs(reg.AllToolIDs())
 	g, err := graph.New(static, store)
 	if err != nil {
 		return nil, err
@@ -55,25 +55,17 @@ func New(
 
 func (s *RoutingGraph) requireRegistry() error {
 	if s == nil || s.reg == nil {
-		return errors.New("routinggraph: capability registry is not set")
+		return errors.New("routinggraph: tool registry is not set")
 	}
 	return nil
 }
 
-// Invoke runs a tool through the embedded capability registry.
-func (s *RoutingGraph) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
+// Invoke runs a tool through the embedded tool registry.
+func (s *RoutingGraph) Invoke(ctx context.Context, inv ports.ToolInvocation) (ports.ToolResult, error) {
 	if err := s.requireRegistry(); err != nil {
 		return ports.ToolResult{Err: err}, err
 	}
 	return s.reg.Invoke(ctx, inv)
-}
-
-// AllCapabilities returns the current capability → tool name snapshot from the registry.
-func (s *RoutingGraph) AllCapabilities() (map[string]ports.Capability, error) {
-	if err := s.requireRegistry(); err != nil {
-		return nil, err
-	}
-	return s.reg.AllCapabilities(), nil
 }
 
 // PlannerToolAppendix builds the planner-facing tool listing (names + JSON Schema snippets).
@@ -92,10 +84,10 @@ func (s *RoutingGraph) PlannerSkills() (string, error) {
 	return bundle.FormatPromptAppendix(), nil
 }
 
-// Tool resolves MCP tool metadata for a capability/tool pair.
-func (s *RoutingGraph) Tool(capID, tool string) (*mcp.Tool, error) {
+// Tool resolves MCP tool metadata by flat tool name.
+func (s *RoutingGraph) Tool(toolName string) (*mcp.Tool, error) {
 	if err := s.requireRegistry(); err != nil {
 		return nil, err
 	}
-	return s.reg.Tool(capID, tool)
+	return s.reg.Tool(toolName)
 }

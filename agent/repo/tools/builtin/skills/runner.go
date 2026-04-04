@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	CapabilityName         = "skills"
 	ToolGetRootDir         = "get_skills_root_dir"
 	ToolReloadSkills       = "reload_skills"
 	ToolListSkills         = "list_skills"
 	ToolReadSkill          = "read_skill"
-	ToolGetPlannerAppendix = "get_skills_planner_appendix"
+	// ToolListSkillNamesForPlanner returns a compact name/path index for the planner (not full skill bodies).
+	ToolListSkillNamesForPlanner = "list_skill_names_for_planner"
 
 	defaultReadLimitRunes = 8000
 	maxReadLimitRunes     = 50000
@@ -30,7 +30,7 @@ type Runner struct {
 	byName map[string]SkillMeta
 }
 
-// NewRunner scans dir for *.md skill files and returns the skills capability runner.
+// NewRunner scans dir for *.md skill files and returns the skills tool backend.
 func NewRunner(dir string) (*Runner, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("skills builtin: directory is required")
@@ -42,7 +42,8 @@ func NewRunner(dir string) (*Runner, error) {
 	return r, nil
 }
 
-func (r *Runner) Name() string { return CapabilityName }
+// Name is the ToolRegistry.Backends map key for this provider (not a user-facing tool id).
+func (r *Runner) Name() string { return "skills" }
 
 func (r *Runner) RootDir() string {
 	if r == nil {
@@ -53,7 +54,7 @@ func (r *Runner) RootDir() string {
 
 func (r *Runner) Reload() error {
 	if r == nil {
-		return fmt.Errorf("skills builtin: runner is nil")
+		return fmt.Errorf("skills builtin: backend is nil")
 	}
 	if r.dir == "" {
 		return fmt.Errorf("skills builtin: directory is required")
@@ -183,8 +184,8 @@ func (r *Runner) builtinTools() []*mcp.Tool {
 			InputSchema: readSkillInputSchema(),
 		},
 		{
-			Name:        ToolGetPlannerAppendix,
-			Description: "Return the skills planner appendix (index of skill names and files only)",
+			Name:        ToolListSkillNamesForPlanner,
+			Description: "Return skill names and source paths only (compact index for planning; use read_skill for full markdown)",
 			InputSchema: emptyObjectSchema(),
 		},
 		{
@@ -220,8 +221,8 @@ func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
 	return r.builtinTools(), nil
 }
 
-func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
-	switch inv.Tool {
+func (r *Runner) Invoke(ctx context.Context, localTool string, arguments map[string]any) (ports.ToolResult, error) {
+	switch localTool {
 	case ToolGetRootDir:
 		return ports.ToolResult{
 			Output: map[string]any{
@@ -241,8 +242,8 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 		}
 		return ports.ToolResult{Output: map[string]any{"skills": list}}, nil
 	case ToolReadSkill:
-		return r.invokeReadSkill(inv.Arguments)
-	case ToolGetPlannerAppendix:
+		return r.invokeReadSkill(arguments)
+	case ToolListSkillNamesForPlanner:
 		return ports.ToolResult{
 			Output: map[string]any{"appendix": r.plannerAppendix()},
 		}, nil
@@ -263,7 +264,7 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 			},
 		}, nil
 	default:
-		return ports.ToolResult{}, fmt.Errorf("skills builtin: unknown tool %q", inv.Tool)
+		return ports.ToolResult{}, fmt.Errorf("skills builtin: unknown tool %q", localTool)
 	}
 }
 

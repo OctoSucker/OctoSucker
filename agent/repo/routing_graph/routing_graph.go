@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/OctoSucker/agent/repo/capability"
+	"github.com/OctoSucker/agent/repo/tools"
 	"github.com/OctoSucker/agent/repo/graph"
 )
 
-// RoutingGraph combines routing state (topology + learned weights, SQLite via graph.Graph) with the capability registry
-// for tool invocation and planner views. The embedded graph.Graph is concurrency-safe; reg is not.
+// RoutingGraph combines routing state (topology + learned weights, SQLite via graph.Graph) with the tool registry
+// for invocation and planner views. The embedded graph.Graph is concurrency-safe; reg is not.
 type RoutingGraph struct {
-	reg *capability.CapabilityRegistry
+	reg *tools.ToolRegistry
 	g   *graph.Graph
 }
 

@@ -10,29 +10,27 @@ import (
 	"github.com/OctoSucker/agent/model"
 	"github.com/OctoSucker/agent/pkg/llmclient"
 	"github.com/OctoSucker/agent/pkg/ports"
-	"github.com/OctoSucker/agent/repo/knowledge_graph"
+	knowledgegraph "github.com/OctoSucker/agent/repo/knowledge_graph"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
-	CapabilityName = "kg_graph"
-
-	ToolAddNode          = "kg_add_node"
-	ToolAddEdge          = "kg_add_edge"
-	ToolResolveExact     = "kg_resolve_exact"
-	ToolResolveContext   = "kg_resolve_context"
-	ToolListNodes        = "kg_list_nodes"
-	ToolListEdges        = "kg_list_edges"
+	ToolAddNode            = "kg_add_node"
+	ToolAddEdge            = "kg_add_edge"
+	ToolLookupNodeExact    = "kg_lookup_node_exact"
+	ToolLookupNodeSemantic = "kg_lookup_node_semantic"
+	ToolListNodes          = "kg_list_nodes"
+	ToolListEdges          = "kg_list_edges"
 )
 
-// Runner runs knowledge-graph tools against workspace SQLite opened from workspaceRoot.
+// Runner runs knowledge-graph tools against workspace SQLite opened from workspaceRoot (implements tools.ToolProvider).
 type Runner struct {
 	db *model.AgentDB
 	g  *knowledgegraph.Graph
 }
 
 // NewRunner opens <workspaceRoot>/data/octoplus.sqlite and builds the graph with llm for embeddings.
-// The DB handle is held for the process lifetime (no runner Close hook).
+// The DB handle is held for the process lifetime (no Close hook).
 func NewRunner(workspaceRoot string, llm *llmclient.OpenAI) (*Runner, error) {
 	if llm == nil {
 		return nil, fmt.Errorf("kg_graph builtin: llm is required")
@@ -64,11 +62,12 @@ func NewRunner(workspaceRoot string, llm *llmclient.OpenAI) (*Runner, error) {
 	return &Runner{db: db, g: g}, nil
 }
 
-func (r *Runner) Name() string { return CapabilityName }
+// Name is the ToolRegistry.Backends map key for this provider (not a user-facing tool id).
+func (r *Runner) Name() string { return "kg_graph" }
 
 func (r *Runner) HasTool(name string) bool {
 	switch strings.TrimSpace(name) {
-	case ToolAddNode, ToolAddEdge, ToolResolveExact, ToolResolveContext, ToolListNodes, ToolListEdges:
+	case ToolAddNode, ToolAddEdge, ToolLookupNodeExact, ToolLookupNodeSemantic, ToolListNodes, ToolListEdges:
 		return true
 	default:
 		return false
@@ -80,7 +79,7 @@ func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
 	case ToolAddNode:
 		return &mcp.Tool{
 			Name:        ToolAddNode,
-			Description: "Add a canonical knowledge-graph node id; stores an embedding for semantic resolution (kg_resolve_context).",
+			Description: "Add a canonical knowledge-graph node id; stores an embedding for kg_lookup_node_semantic.",
 			InputSchema: schemaAddNode(),
 		}, nil
 	case ToolAddEdge:
@@ -89,16 +88,16 @@ func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
 			Description: "Add a directed influence edge between existing node ids. Use positive=false for negative correlation.",
 			InputSchema: schemaAddEdge(),
 		}, nil
-	case ToolResolveExact:
+	case ToolLookupNodeExact:
 		return &mcp.Tool{
-			Name:        ToolResolveExact,
-			Description: "Resolve a term to a stored node id by exact match only (no embedding API).",
+			Name:        ToolLookupNodeExact,
+			Description: "Find a stored node id by exact string match on the term (no embedding API).",
 			InputSchema: schemaTerm(),
 		}, nil
-	case ToolResolveContext:
+	case ToolLookupNodeSemantic:
 		return &mcp.Tool{
-			Name:        ToolResolveContext,
-			Description: "Resolve a term: exact id first, else cosine match against stored node embeddings (calls embedding API).",
+			Name:        ToolLookupNodeSemantic,
+			Description: "Find a node id: try exact match on the term first, else cosine similarity against stored node embeddings (calls embedding API).",
 			InputSchema: schemaTerm(),
 		}, nil
 	case ToolListNodes:
@@ -119,7 +118,7 @@ func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
 }
 
 func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
-	names := []string{ToolAddNode, ToolAddEdge, ToolResolveExact, ToolResolveContext, ToolListNodes, ToolListEdges}
+	names := []string{ToolAddNode, ToolAddEdge, ToolLookupNodeExact, ToolLookupNodeSemantic, ToolListNodes, ToolListEdges}
 	out := make([]*mcp.Tool, 0, len(names))
 	for _, n := range names {
 		t, err := r.Tool(n)
@@ -131,13 +130,13 @@ func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
 	return out, nil
 }
 
-func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
+func (r *Runner) Invoke(ctx context.Context, localTool string, arguments map[string]any) (ports.ToolResult, error) {
 	if r == nil || r.db == nil || r.g == nil {
-		return ports.ToolResult{Err: fmt.Errorf("kg_graph builtin: runner not initialized")}, fmt.Errorf("kg_graph builtin: runner not initialized")
+		return ports.ToolResult{Err: fmt.Errorf("kg_graph builtin: not initialized")}, fmt.Errorf("kg_graph builtin: not initialized")
 	}
-	switch inv.Tool {
+	switch localTool {
 	case ToolAddNode:
-		id, err := parseRequiredString(inv.Arguments, ToolAddNode, "id")
+		id, err := parseRequiredString(arguments, ToolAddNode, "id")
 		if err != nil {
 			return ports.ToolResult{Err: err}, err
 		}
@@ -147,15 +146,15 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 		return ports.ToolResult{Output: map[string]any{"id": id, "added": true}}, nil
 
 	case ToolAddEdge:
-		fromID, err := parseRequiredString(inv.Arguments, ToolAddEdge, "from_id")
+		fromID, err := parseRequiredString(arguments, ToolAddEdge, "from_id")
 		if err != nil {
 			return ports.ToolResult{Err: err}, err
 		}
-		toID, err := parseRequiredString(inv.Arguments, ToolAddEdge, "to_id")
+		toID, err := parseRequiredString(arguments, ToolAddEdge, "to_id")
 		if err != nil {
 			return ports.ToolResult{Err: err}, err
 		}
-		positive, err := parseOptionalPositive(inv.Arguments)
+		positive, err := parseOptionalPositive(arguments)
 		if err != nil {
 			return ports.ToolResult{Err: err}, err
 		}
@@ -164,8 +163,8 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 		}
 		return ports.ToolResult{Output: map[string]any{"from_id": fromID, "to_id": toID, "positive": positive}}, nil
 
-	case ToolResolveExact:
-		term, err := parseRequiredString(inv.Arguments, ToolResolveExact, "term")
+	case ToolLookupNodeExact:
+		term, err := parseRequiredString(arguments, ToolLookupNodeExact, "term")
 		if err != nil {
 			return ports.ToolResult{Err: err}, err
 		}
@@ -174,13 +173,13 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 			return ports.ToolResult{Err: err}, err
 		}
 		if !ok {
-			err := fmt.Errorf("kg_graph builtin: kg_resolve_exact: no exact match for %q", term)
+			err := fmt.Errorf("kg_graph builtin: %s: no exact match for %q", ToolLookupNodeExact, term)
 			return ports.ToolResult{Err: err}, err
 		}
 		return ports.ToolResult{Output: map[string]any{"canonical": canon, "matched": true}}, nil
 
-	case ToolResolveContext:
-		term, err := parseRequiredString(inv.Arguments, ToolResolveContext, "term")
+	case ToolLookupNodeSemantic:
+		term, err := parseRequiredString(arguments, ToolLookupNodeSemantic, "term")
 		if err != nil {
 			return ports.ToolResult{Err: err}, err
 		}
@@ -189,7 +188,7 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 			return ports.ToolResult{Err: err}, err
 		}
 		if !ok {
-			err := fmt.Errorf("kg_graph builtin: kg_resolve_context: no match for %q", term)
+			err := fmt.Errorf("kg_graph builtin: %s: no match for %q", ToolLookupNodeSemantic, term)
 			return ports.ToolResult{Err: err}, err
 		}
 		return ports.ToolResult{Output: map[string]any{"canonical": canon, "matched": true}}, nil
@@ -217,7 +216,7 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 		return ports.ToolResult{Output: map[string]any{"edges": edges}}, nil
 
 	default:
-		err := fmt.Errorf("kg_graph builtin: unknown tool %q", inv.Tool)
+		err := fmt.Errorf("kg_graph builtin: unknown tool %q", localTool)
 		return ports.ToolResult{Err: err}, err
 	}
 }

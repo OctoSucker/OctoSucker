@@ -8,8 +8,8 @@ import (
 
 // RoutingEdgeRow is one row in routing_edges.
 type RoutingEdgeRow struct {
-	FromCap string
-	ToCap   string
+	FromTool string
+	ToTool   string
 	Success float64
 	Failure float64
 	Cost    float64
@@ -18,7 +18,7 @@ type RoutingEdgeRow struct {
 
 // RoutingEdgesSelectAll loads every edge row.
 func (a *AgentDB) RoutingEdgesSelectAll() ([]RoutingEdgeRow, error) {
-	rows, err := a.DB.Query(fmt.Sprintf(`SELECT from_cap, to_cap, success, failure, cost, latency FROM %s`, TableRoutingEdges))
+	rows, err := a.DB.Query(fmt.Sprintf(`SELECT from_tool, to_tool, success, failure, cost, latency FROM %s`, TableRoutingEdges))
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +26,7 @@ func (a *AgentDB) RoutingEdgesSelectAll() ([]RoutingEdgeRow, error) {
 	var out []RoutingEdgeRow
 	for rows.Next() {
 		var r RoutingEdgeRow
-		if err := rows.Scan(&r.FromCap, &r.ToCap, &r.Success, &r.Failure, &r.Cost, &r.Latency); err != nil {
+		if err := rows.Scan(&r.FromTool, &r.ToTool, &r.Success, &r.Failure, &r.Cost, &r.Latency); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -59,13 +59,13 @@ func (a *AgentDB) RoutingMetaUpsert(key, value string) error {
 
 // RoutingEdgeUpsert inserts or updates one edge.
 func (a *AgentDB) RoutingEdgeUpsert(r RoutingEdgeRow) error {
-	_, err := a.DB.Exec(fmt.Sprintf(`INSERT INTO %s (from_cap, to_cap, success, failure, cost, latency) VALUES (?,?,?,?,?,?)
-		ON CONFLICT(from_cap, to_cap) DO UPDATE SET
+	_, err := a.DB.Exec(fmt.Sprintf(`INSERT INTO %s (from_tool, to_tool, success, failure, cost, latency) VALUES (?,?,?,?,?,?)
+		ON CONFLICT(from_tool, to_tool) DO UPDATE SET
 			success = excluded.success,
 			failure = excluded.failure,
 			cost = excluded.cost,
 			latency = excluded.latency`, TableRoutingEdges),
-		r.FromCap, r.ToCap, r.Success, r.Failure, r.Cost, r.Latency)
+		r.FromTool, r.ToTool, r.Success, r.Failure, r.Cost, r.Latency)
 	return err
 }
 

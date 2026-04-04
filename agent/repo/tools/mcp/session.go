@@ -12,18 +12,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type Runner struct {
+// RemoteSession is an MCP client session and cached tool list for one server.
+type RemoteSession struct {
 	name  string
 	mu    sync.RWMutex
 	sess  *mcp.ClientSession
 	Tools map[string]*mcp.Tool
 }
 
-func NewMcpRunner(ctx context.Context, endpoint string) (*Runner, error) {
+func NewRemoteSession(ctx context.Context, endpoint string) (*RemoteSession, error) {
 	if endpoint == "" {
 		return nil, fmt.Errorf("mcp: endpoint is required")
 	}
-	r := &Runner{
+	s := &RemoteSession{
 		Tools: make(map[string]*mcp.Tool),
 	}
 	mc := mcp.NewClient(&mcp.Implementation{Name: "octoplus-agent", Version: "0.1"}, nil)
@@ -35,18 +36,18 @@ func NewMcpRunner(ctx context.Context, endpoint string) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.sess = sess
-	r.name = sess.InitializeResult().ServerInfo.Name
-	return r, nil
+	s.sess = sess
+	s.name = sess.InitializeResult().ServerInfo.Name
+	return s, nil
 }
 
-func (r *Runner) Name() string { return r.name }
+func (s *RemoteSession) Name() string { return s.name }
 
-func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
-	r.Tools = make(map[string]*mcp.Tool)
+func (s *RemoteSession) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
+	s.Tools = make(map[string]*mcp.Tool)
 	var cursor string
 	for {
-		res, err := r.sess.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
+		res, err := s.sess.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
 		if err != nil {
 			return nil, err
 		}
@@ -54,7 +55,7 @@ func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
 			if t == nil || t.Name == "" {
 				continue
 			}
-			r.Tools[t.Name] = t
+			s.Tools[t.Name] = t
 		}
 		if res.NextCursor == "" {
 			break
@@ -62,46 +63,46 @@ func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
 		cursor = res.NextCursor
 	}
 	var tools []*mcp.Tool
-	for tool := range r.Tools {
-		tools = append(tools, r.Tools[tool])
+	for tool := range s.Tools {
+		tools = append(tools, s.Tools[tool])
 	}
 	return tools, nil
 }
 
-func (r *Runner) HasTool(tool string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if len(r.Tools) == 0 {
-		r.ToolList(context.Background())
+func (s *RemoteSession) HasTool(tool string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.Tools) == 0 {
+		s.ToolList(context.Background())
 	}
-	_, ok := r.Tools[tool]
+	_, ok := s.Tools[tool]
 	return ok
 }
 
-func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if len(r.Tools) == 0 {
-		r.ToolList(context.Background())
+func (s *RemoteSession) Tool(tool string) (*mcp.Tool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.Tools) == 0 {
+		s.ToolList(context.Background())
 	}
-	t, ok := r.Tools[tool]
+	t, ok := s.Tools[tool]
 	if !ok {
 		return nil, fmt.Errorf("mcp: tool %q not exposed by MCP server", tool)
 	}
 	return t, nil
 }
 
-func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	ok := r.HasTool(inv.Tool)
+func (s *RemoteSession) Invoke(ctx context.Context, localTool string, arguments map[string]any) (ports.ToolResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ok := s.HasTool(localTool)
 	if !ok {
-		return ports.ToolResult{Err: fmt.Errorf("mcp: tool %q not exposed by MCP server", inv.Tool)}, fmt.Errorf("mcp: tool %q not exposed by MCP server", inv.Tool)
+		return ports.ToolResult{Err: fmt.Errorf("mcp: tool %q not exposed by MCP server", localTool)}, fmt.Errorf("mcp: tool %q not exposed by MCP server", localTool)
 	}
 
-	res, err := r.sess.CallTool(ctx, &mcp.CallToolParams{Name: inv.Tool, Arguments: inv.Arguments})
+	res, err := s.sess.CallTool(ctx, &mcp.CallToolParams{Name: localTool, Arguments: arguments})
 	if err != nil {
-		log.Printf("mcp: CallTool failed tool=%q arguments=%v err=%v", inv.Tool, inv.Arguments, err)
+		log.Printf("mcp: CallTool failed tool=%q arguments=%v err=%v", localTool, arguments, err)
 		return ports.ToolResult{Err: err}, err
 	}
 	if res.IsError {

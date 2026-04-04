@@ -6,34 +6,41 @@ import (
 	"strings"
 )
 
-const routingNodeSep = "::"
-
+// Node is a routing vertex: a single globally unique tool name.
 type Node struct {
-	Capability string `json:"capability"`
-	Tool       string `json:"tool"`
+	Tool string `json:"tool"`
+}
+
+func trimTool(s string) string {
+	return strings.TrimSpace(s)
 }
 
 // IsEntry reports whether n is the synthetic entry vertex.
 func (n Node) IsEntry() bool {
-	return n.Capability == "" && n.Tool == ""
+	return trimTool(n.Tool) == ""
 }
 
-// IsValid reports a real routing vertex (non-empty capability and tool).
+// IsValid reports a real routing vertex (non-empty tool name, no "::" which is reserved as invalid).
 func (n Node) IsValid() bool {
-	return n.Capability != "" && n.Tool != ""
+	t := trimTool(n.Tool)
+	return t != "" && !strings.Contains(t, "::")
 }
 
-// MakeNode builds a vertex from capability and tool strings.
-func MakeNode(capability, tool string) *Node {
-	return &Node{Capability: capability, Tool: tool}
+// MakeNode builds a vertex from a tool name.
+func MakeNode(tool string) *Node {
+	t := trimTool(tool)
+	if t == "" || strings.Contains(t, "::") {
+		return &Node{}
+	}
+	return &Node{Tool: t}
 }
 
-// String returns the canonical id (cap::tool), or "" for the entry vertex.
+// String returns the canonical id, or "" for the entry vertex.
 func (n Node) String() string {
 	if n.IsEntry() {
 		return ""
 	}
-	return n.Capability + routingNodeSep + n.Tool
+	return trimTool(n.Tool)
 }
 
 // ParseNode parses a canonical id. The empty string is the entry vertex (ok true).
@@ -41,11 +48,32 @@ func ParseNode(s string) (Node, bool) {
 	if s == "" {
 		return Node{}, true
 	}
-	parts := strings.SplitN(s, routingNodeSep, 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	t := trimTool(s)
+	if t == "" || strings.Contains(t, "::") {
 		return Node{}, false
 	}
-	return Node{Capability: parts[0], Tool: parts[1]}, true
+	return Node{Tool: t}, true
+}
+
+// MarshalJSON emits only {"tool": "..."} for planner and persisted plans.
+func (n Node) MarshalJSON() ([]byte, error) {
+	type out struct {
+		Tool string `json:"tool"`
+	}
+	return json.Marshal(out{Tool: n.Tool})
+}
+
+// UnmarshalJSON accepts {"tool":"name"} only.
+func (n *Node) UnmarshalJSON(b []byte) error {
+	type raw struct {
+		Tool string `json:"tool"`
+	}
+	var R raw
+	if err := json.Unmarshal(b, &R); err != nil {
+		return err
+	}
+	n.Tool = trimTool(R.Tool)
+	return nil
 }
 
 // RoutePath is a sequence of routing vertices. JSON is a string array of canonical ids.
@@ -72,11 +100,11 @@ func (p *RoutePath) UnmarshalJSON(b []byte) error {
 	}
 	out := make([]Node, 0, len(raw))
 	for _, x := range raw {
-		n, ok := ParseNode(x)
-		if !ok || !n.IsValid() {
+		node, ok := ParseNode(x)
+		if !ok || !node.IsValid() {
 			return fmt.Errorf("graph: invalid path node %q", x)
 		}
-		out = append(out, n)
+		out = append(out, node)
 	}
 	*p = out
 	return nil

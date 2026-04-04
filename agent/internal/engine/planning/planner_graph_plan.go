@@ -6,12 +6,12 @@ import (
 	"fmt"
 
 	"github.com/OctoSucker/agent/pkg/ports"
-	"github.com/OctoSucker/agent/repo/capability/mcp"
+	"github.com/OctoSucker/agent/repo/tools/mcp"
 	"github.com/OctoSucker/agent/repo/graph"
 	"github.com/google/uuid"
 )
 
-// buildGraphPlan uses routing-graph frontier to choose a concrete capability/tool, then asks LLM to fill only that tool's arguments.
+// buildGraphPlan uses routing-graph frontier to choose a concrete tool, then asks LLM to fill only that tool's arguments.
 func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, task *ports.Task, pl ports.PayloadUserInput) (*ports.Plan, error) {
 	lastNodePtr := &graph.Node{}
 	excludeNode := &graph.Node{}
@@ -31,7 +31,7 @@ func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, task *ports
 	}
 	selectedNode := candidateNodes[0]
 
-	systemPrompt, userPrompt, err := p.buildGraphPlanSystemPrompt(ctx, selectedNode, task.UserInput)
+	systemPrompt, userPrompt, err := p.buildGraphPlanSystemPrompt(selectedNode, task.UserInput)
 	if err != nil {
 		return nil, fmt.Errorf("planner: graph plan system prompt: %w", err)
 	}
@@ -40,7 +40,7 @@ func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, task *ports
 	if err := p.PlannerLLM.CompleteJSON(ctx, systemPrompt, userPrompt, &args); err != nil {
 		return nil, fmt.Errorf("planner: graph plan arguments json: %w", err)
 	}
-	toolSpec, err := p.RouteGraph.Tool(selectedNode.Capability, selectedNode.Tool)
+	toolSpec, err := p.RouteGraph.Tool(selectedNode.Tool)
 	if err != nil {
 		return nil, fmt.Errorf("planner: graph plan tool spec: %w", err)
 	}
@@ -58,7 +58,7 @@ func (p *Planner) buildGraphPlan(ctx context.Context, taskID string, task *ports
 	return &ports.Plan{Steps: []*ports.PlanStep{parsed}}, nil
 }
 
-func (p *Planner) buildGraphPlanSystemPrompt(ctx context.Context, selectedNode graph.Node, userInput string) (string, string, error) {
+func (p *Planner) buildGraphPlanSystemPrompt(selectedNode graph.Node, userInput string) (string, string, error) {
 
 	systemPrompt := `
 You are a tool argument generator for an AI agent.
@@ -67,7 +67,7 @@ Your job is to generate a valid JSON object for tool arguments.
 
 You are given:
 - a user task
-- a specific capability and tool
+- a specific tool name (flat id from the planner tool list)
 - a JSON schema describing the tool input
 
 You must generate arguments that strictly follow the schema.
@@ -100,7 +100,7 @@ Then output JSON only.
 
 `
 
-	toolSpec, err := p.RouteGraph.Tool(selectedNode.Capability, selectedNode.Tool)
+	toolSpec, err := p.RouteGraph.Tool(selectedNode.Tool)
 	if err != nil {
 		return "", "", fmt.Errorf("planner: graph plan tool spec: %w", err)
 	}
@@ -114,10 +114,6 @@ Then output JSON only.
 	%s
 	
 	----------------------------------------
-	[CAPABILITY]
-	%s
-	
-	----------------------------------------
 	[TOOL]
 	%s
 	
@@ -128,7 +124,7 @@ Then output JSON only.
 	Generate arguments for this tool.
 	
 	Return ONLY a JSON object.
-	`, userInput, selectedNode.Capability, selectedNode.Tool, string(schemaRaw))
+	`, userInput, selectedNode.Tool, string(schemaRaw))
 
 	return systemPrompt, userPrompt, nil
 }

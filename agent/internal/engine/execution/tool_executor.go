@@ -5,7 +5,7 @@ import (
 	"log"
 
 	"github.com/OctoSucker/agent/pkg/ports"
-	skillsbuiltin "github.com/OctoSucker/agent/repo/capability/builtin/skills"
+	skillsbuiltin "github.com/OctoSucker/agent/repo/tools/builtin/skills"
 	routinggraph "github.com/OctoSucker/agent/repo/routing_graph"
 	"github.com/OctoSucker/agent/repo/task"
 )
@@ -17,16 +17,14 @@ type ToolExecutor struct {
 }
 
 func (x *ToolExecutor) HandleToolCall(ctx context.Context, pl ports.PayloadToolCall) (*ports.Event, error) {
-	res, err := x.RouteGraph.Invoke(ctx, ports.CapabilityInvocation{
-		CapabilityName: pl.Node.Capability,
-		Tool:           pl.Node.Tool,
-		Arguments:      pl.Arguments,
+	res, err := x.RouteGraph.Invoke(ctx, ports.ToolInvocation{
+		Tool:      pl.Node.Tool,
+		Arguments: pl.Arguments,
 	})
 	if err != nil {
 		res = ports.ToolResult{Err: err}
 	} else {
-		if pl.Node.Capability == skillsbuiltin.CapabilityName &&
-			pl.Node.Tool == skillsbuiltin.ToolReloadSkills &&
+		if pl.Node.Tool == skillsbuiltin.ToolReloadSkills &&
 			x.OnCatalogChanged != nil {
 			// retry 2 times
 			for i := 0; i < 2; i++ {

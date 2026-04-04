@@ -10,10 +10,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const (
-	CapabilityName       = "catalog"
-	ToolJustChatUsingLLM = "just_chat_using_llm"
-)
+// ToolNaturalLanguageReply answers the user in plain text when no other tools are needed (greetings, Q&A, small talk).
+const ToolNaturalLanguageReply = "natural_language_reply"
 
 type Runner struct {
 	llm *llmclient.OpenAI
@@ -42,21 +40,22 @@ func justChatInputSchema() map[string]any {
 
 const justChatSystemPrompt = `You are a helpful assistant. Reply in plain text only (no JSON, no tool calls). Match the user's language when they write in a specific language. Be concise unless the user asks for detail.`
 
-func (r *Runner) Name() string { return CapabilityName }
+// Name is the ToolRegistry.Backends map key for this provider (not a user-facing tool id).
+func (r *Runner) Name() string { return "catalog" }
 
 func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
 	return []*mcp.Tool{
 		{
-			Name: ToolJustChatUsingLLM,
-			Description: "Generate a natural-language reply to the user via the model. Use for greetings, small talk, or any request that needs no other tools " +
-				"(no exec, no file ops, no Telegram send_message, etc.). The runtime surfaces this text to the user; do not call messaging tools only to echo chat.",
+			Name: ToolNaturalLanguageReply,
+			Description: "Reply to the user in plain text. Use for greetings, small talk, or questions that need no other tools " +
+				"(no shell exec, no file ops, no Telegram send_message, etc.). The runtime shows this text to the user.",
 			InputSchema: justChatInputSchema(),
 		},
 	}, nil
 }
 
 func (r *Runner) HasTool(name string) bool {
-	return name == ToolJustChatUsingLLM
+	return name == ToolNaturalLanguageReply
 }
 
 func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
@@ -72,38 +71,38 @@ func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
 	return nil, fmt.Errorf("catalog builtin: unknown tool %q", tool)
 }
 
-func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
-	switch inv.Tool {
-	case ToolJustChatUsingLLM:
-		um, err := parseUserMessage(inv.Arguments)
+func (r *Runner) Invoke(ctx context.Context, localTool string, arguments map[string]any) (ports.ToolResult, error) {
+	switch localTool {
+	case ToolNaturalLanguageReply:
+		um, err := parseUserMessage(arguments)
 		if err != nil {
 			return ports.ToolResult{Err: err}, nil
 		}
 		reply, err := r.llm.Complete(ctx, justChatSystemPrompt, um)
 		if err != nil {
-			return ports.ToolResult{Err: fmt.Errorf("catalog builtin: just_chat_using_llm: %w", err)}, fmt.Errorf("catalog builtin: just_chat_using_llm: %w", err)
+			return ports.ToolResult{Err: fmt.Errorf("catalog builtin: %s: %w", ToolNaturalLanguageReply, err)}, fmt.Errorf("catalog builtin: %s: %w", ToolNaturalLanguageReply, err)
 		}
 		return ports.ToolResult{Output: strings.TrimSpace(reply)}, nil
 	default:
-		return ports.ToolResult{Err: fmt.Errorf("catalog builtin: unknown tool %q", inv.Tool)}, fmt.Errorf("catalog builtin: unknown tool %q", inv.Tool)
+		return ports.ToolResult{Err: fmt.Errorf("catalog builtin: unknown tool %q", localTool)}, fmt.Errorf("catalog builtin: unknown tool %q", localTool)
 	}
 }
 
 func parseUserMessage(args map[string]any) (string, error) {
 	if args == nil {
-		return "", fmt.Errorf("catalog builtin: just_chat_using_llm: arguments required")
+		return "", fmt.Errorf("catalog builtin: %s: arguments required", ToolNaturalLanguageReply)
 	}
 	raw, ok := args["user_message"]
 	if !ok {
-		return "", fmt.Errorf("catalog builtin: just_chat_using_llm: user_message is required")
+		return "", fmt.Errorf("catalog builtin: %s: user_message is required", ToolNaturalLanguageReply)
 	}
 	s, ok := raw.(string)
 	if !ok {
-		return "", fmt.Errorf("catalog builtin: just_chat_using_llm: user_message must be a string")
+		return "", fmt.Errorf("catalog builtin: %s: user_message must be a string", ToolNaturalLanguageReply)
 	}
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return "", fmt.Errorf("catalog builtin: just_chat_using_llm: user_message must be non-empty")
+		return "", fmt.Errorf("catalog builtin: %s: user_message must be non-empty", ToolNaturalLanguageReply)
 	}
 	return s, nil
 }

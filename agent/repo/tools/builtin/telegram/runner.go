@@ -30,7 +30,8 @@ func NewRunner(t config.Telegram) (*Runner, error) {
 	return &Runner{cfg: cfg, api: api}, nil
 }
 
-func (r *Runner) Name() string { return CapabilityName }
+// Name is the ToolRegistry.Backends map key for this provider (not a user-facing tool id).
+func (r *Runner) Name() string { return "telegram" }
 
 func (r *Runner) HasTool(tool string) bool {
 	switch strings.TrimSpace(tool) {
@@ -91,21 +92,21 @@ func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
 	return out, nil
 }
 
-func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (ports.ToolResult, error) {
-	if !r.HasTool(inv.Tool) {
-		return ports.ToolResult{Err: fmt.Errorf("telegram builtin: unknown tool %q", inv.Tool)}, fmt.Errorf("telegram builtin: unknown tool %q", inv.Tool)
+func (r *Runner) Invoke(ctx context.Context, localTool string, arguments map[string]any) (ports.ToolResult, error) {
+	if !r.HasTool(localTool) {
+		return ports.ToolResult{Err: fmt.Errorf("telegram builtin: unknown tool %q", localTool)}, fmt.Errorf("telegram builtin: unknown tool %q", localTool)
 	}
 	var out string
-	switch inv.Tool {
+	switch localTool {
 	case "send_telegram_message":
 		var args sendArgs
-		if err := decodeArgs(inv.Arguments, &args); err != nil {
+		if err := decodeArgs(arguments, &args); err != nil {
 			return ports.ToolResult{Err: fmt.Errorf("telegram builtin: arguments: %w", err)}, fmt.Errorf("telegram builtin: arguments: %w", err)
 		}
 		out = r.toolSendTelegramMessage(ctx, args)
 	case "get_telegram_chat":
 		var args chatArgs
-		if err := decodeArgs(inv.Arguments, &args); err != nil {
+		if err := decodeArgs(arguments, &args); err != nil {
 			return ports.ToolResult{Err: fmt.Errorf("telegram builtin: arguments: %w", err)}, fmt.Errorf("telegram builtin: arguments: %w", err)
 		}
 		out = r.toolGetTelegramChat(ctx, args)
@@ -114,7 +115,7 @@ func (r *Runner) Invoke(ctx context.Context, inv ports.CapabilityInvocation) (po
 	case "get_telegram_allowed_chat_ids":
 		out = r.toolGetTelegramAllowedChatIDs(ctx)
 	default:
-		return ports.ToolResult{Err: fmt.Errorf("telegram builtin: unknown tool %q", inv.Tool)}, fmt.Errorf("telegram builtin: unknown tool %q", inv.Tool)
+		return ports.ToolResult{Err: fmt.Errorf("telegram builtin: unknown tool %q", localTool)}, fmt.Errorf("telegram builtin: unknown tool %q", localTool)
 	}
 	return ports.ToolResult{Output: out}, nil
 }
