@@ -142,6 +142,9 @@ func (d *DB) migrate() error {
 	if err := d.migrateRoutingEdgesToolColumns(); err != nil {
 		return err
 	}
+	if err := d.migrateKnowledgeGraphEdgesEndpointColumns(); err != nil {
+		return err
+	}
 	return d.migrateKnowledgeGraphNodeEmbeddingColumn()
 }
 
@@ -163,6 +166,33 @@ func (d *DB) migrateRoutingEdgesToolColumns() error {
 	}
 	if _, err := d.conn.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN to_cap TO to_tool`, TableRoutingEdges)); err != nil {
 		return fmt.Errorf("store migrate routing_edges rename to_cap: %w", err)
+	}
+	return nil
+}
+
+// migrateKnowledgeGraphEdgesEndpointColumns renames legacy columns "from"/"to" to from_id/to_id (SQLite reserved words).
+func (d *DB) migrateKnowledgeGraphEdgesEndpointColumns() error {
+	var fromIDCols int
+	q := fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info(%q) WHERE name = 'from_id'`, TableKnowledgeGraphEdges)
+	if err := d.conn.QueryRow(q).Scan(&fromIDCols); err != nil {
+		return fmt.Errorf("store migrate kg_edges pragma from_id: %w", err)
+	}
+	if fromIDCols > 0 {
+		return nil
+	}
+	var oldFrom int
+	q2 := fmt.Sprintf(`SELECT COUNT(*) FROM pragma_table_info(%q) WHERE name = 'from'`, TableKnowledgeGraphEdges)
+	if err := d.conn.QueryRow(q2).Scan(&oldFrom); err != nil {
+		return fmt.Errorf("store migrate kg_edges pragma from: %w", err)
+	}
+	if oldFrom == 0 {
+		return nil
+	}
+	if _, err := d.conn.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN "from" TO from_id`, TableKnowledgeGraphEdges)); err != nil {
+		return fmt.Errorf("store migrate kg_edges rename from: %w", err)
+	}
+	if _, err := d.conn.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN "to" TO to_id`, TableKnowledgeGraphEdges)); err != nil {
+		return fmt.Errorf("store migrate kg_edges rename to: %w", err)
 	}
 	return nil
 }

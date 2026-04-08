@@ -5,11 +5,11 @@ import (
 	"fmt"
 )
 
-// KnowledgeGraphEdgeRow is one persisted influence edge (from → to, correlation sign).
+// KnowledgeGraphEdgeRow is one persisted influence edge (from_id → to_id, correlation sign).
 type KnowledgeGraphEdgeRow struct {
-	FromID   string
-	ToID     string
-	Positive bool
+	FromID   string `json:"from_id"`
+	ToID     string `json:"to_id"`
+	Positive bool   `json:"positive"`
 }
 
 // KnowledgeGraphNodeExists reports whether a node id is stored.
@@ -58,12 +58,12 @@ func (d *DB) KnowledgeGraphNodesSelectAll() ([]KnowledgeGraphNodeRow, error) {
 	return out, rows.Err()
 }
 
-// KnowledgeGraphEdgeExists reports whether a directed edge from_id → to_id exists.
-func (d *DB) KnowledgeGraphEdgeExists(fromID, toID string) (bool, error) {
+// KnowledgeGraphEdgeExists reports whether a directed edge from → to exists.
+func (d *DB) KnowledgeGraphEdgeExists(from, to string) (bool, error) {
 	var n int
 	err := d.conn.QueryRow(fmt.Sprintf(
 		`SELECT 1 FROM %s WHERE from_id = ? AND to_id = ? LIMIT 1`,
-		TableKnowledgeGraphEdges), fromID, toID).Scan(&n)
+		TableKnowledgeGraphEdges), from, to).Scan(&n)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -74,23 +74,23 @@ func (d *DB) KnowledgeGraphEdgeExists(fromID, toID string) (bool, error) {
 }
 
 // KnowledgeGraphEdgeSelect loads one edge by endpoints. ok is false when no row exists.
-func (d *DB) KnowledgeGraphEdgeSelect(fromID, toID string) (KnowledgeGraphEdgeRow, bool, error) {
+func (d *DB) KnowledgeGraphEdgeSelect(from, to string) (KnowledgeGraphEdgeRow, bool, error) {
 	var pos int
 	err := d.conn.QueryRow(fmt.Sprintf(
 		`SELECT positive FROM %s WHERE from_id = ? AND to_id = ?`,
-		TableKnowledgeGraphEdges), fromID, toID).Scan(&pos)
+		TableKnowledgeGraphEdges), from, to).Scan(&pos)
 	if err == sql.ErrNoRows {
 		return KnowledgeGraphEdgeRow{}, false, nil
 	}
 	if err != nil {
 		return KnowledgeGraphEdgeRow{}, false, err
 	}
-	return KnowledgeGraphEdgeRow{FromID: fromID, ToID: toID, Positive: pos != 0}, true, nil
+	return KnowledgeGraphEdgeRow{FromID: from, ToID: to, Positive: pos != 0}, true, nil
 }
 
 // KnowledgeGraphEdgeInsert inserts an edge row. Endpoints must reference existing nodes.
-func (d *DB) KnowledgeGraphEdgeInsert(fromID, toID string, positive bool) error {
-	if fromID == "" || toID == "" {
+func (d *DB) KnowledgeGraphEdgeInsert(from, to string, positive bool) error {
+	if from == "" || to == "" {
 		return fmt.Errorf("store: KnowledgeGraphEdgeInsert: empty from or to")
 	}
 	p := 0
@@ -99,7 +99,7 @@ func (d *DB) KnowledgeGraphEdgeInsert(fromID, toID string, positive bool) error 
 	}
 	_, err := d.conn.Exec(fmt.Sprintf(
 		`INSERT INTO %s (from_id, to_id, positive) VALUES (?, ?, ?)`,
-		TableKnowledgeGraphEdges), fromID, toID, p)
+		TableKnowledgeGraphEdges), from, to, p)
 	return err
 }
 

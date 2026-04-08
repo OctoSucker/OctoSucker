@@ -2,7 +2,7 @@
 package types
 
 // Event 在 dispatcher 队列中传递；各 Type 对应 Task 状态上的分段注释。
-// EvToolCall：由 PlanExec 入队，ToolExec 执行 MCP；一般不单独对应 Task 持久字段，结果经 EvObservationReady 写回。
+// EvPlanProgressed：PlanExec 选取下一步并同步调用工具，直接产生 EvObservationReady。
 type Event struct {
 	Type    string
 	Payload any
@@ -21,12 +21,6 @@ func TaskIDFromEvent(evt Event) (string, bool) {
 		return p.TaskID, p.TaskID != ""
 	case EvPlanProgressed:
 		p, ok := evt.Payload.(PayloadPlanProgressed)
-		if !ok {
-			return "", false
-		}
-		return p.TaskID, p.TaskID != ""
-	case EvToolCall:
-		p, ok := evt.Payload.(PayloadToolCall)
 		if !ok {
 			return "", false
 		}
@@ -50,8 +44,7 @@ func TaskIDFromEvent(evt Event) (string, bool) {
 
 const (
 	EvUserInput        = "UserInput"        // Planner：路由、计划、技能先验等 → Task 分段「EvUserInput」与「贯穿」
-	EvPlanProgressed   = "PlanProgressed"   // 尚无 Plan 时 Planner 补全；已有 Plan 时 PlanExec 推进步进
-	EvToolCall         = "ToolCall"         // ToolExec → 随后 ObservationReady
-	EvObservationReady = "ObservationReady" // StepCritic：Plan 步观测写入、重试、重规划 → Task 分段「ObservationReady」
-	EvTrajectoryCheck  = "TrajectoryCheck"  // TrajectoryCritic：LLM 目标达成判定；达成则收尾并 nil 结束 Run，未达成则返回 EvUserInput 重规划
+	EvPlanProgressed   = "PlanProgressed"   // Planner 追加步骤后：PlanExec 执行下一 runnable 步并产生 ObservationReady
+	EvObservationReady = "ObservationReady" // StepCritic：写入观测；成功后 → TrajectoryCheck
+	EvTrajectoryCheck  = "TrajectoryCheck"  // TrajectoryCritic：完成 / 中止 / 续规划 / 截断重规划 → nil 或 EvUserInput
 )

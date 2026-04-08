@@ -2,11 +2,11 @@ package knowledge
 
 import "fmt"
 
-// Edge is a directed influence from From to To. Positive is true for positive correlation,
+// Edge is a directed influence from FromID to ToID. Positive is true for positive correlation,
 // false for negative correlation.
 type Edge struct {
-	From     string
-	To       string
+	FromID   string
+	ToID     string
 	Positive bool
 }
 
@@ -47,7 +47,7 @@ func (g *Graph) AddEdge(fromID, toID string, positive bool) error {
 		return fmt.Errorf("knowledgegraph: AddEdge: db: %w", err)
 	}
 	if edgeExists {
-		return fmt.Errorf("knowledgegraph: AddEdge: edge %q -> %q already exists", fromID, toID)
+		return nil
 	}
 	if err := g.db.KnowledgeGraphEdgeInsert(fromID, toID, positive); err != nil {
 		return fmt.Errorf("knowledgegraph: AddEdge: db: %w", err)
@@ -67,7 +67,7 @@ func (g *Graph) Edge(fromID, toID string) (Edge, bool, error) {
 	if !ok {
 		return Edge{}, false, nil
 	}
-	return Edge{From: row.FromID, To: row.ToID, Positive: row.Positive}, true, nil
+	return Edge{FromID: row.FromID, ToID: row.ToID, Positive: row.Positive}, true, nil
 }
 
 // AddEdgeIfAbsent inserts the edge when missing. If the edge already exists with the same

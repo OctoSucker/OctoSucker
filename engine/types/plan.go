@@ -1,13 +1,45 @@
 package types
 
 import (
+	"encoding/json"
+	"fmt"
 	"maps"
+	"strings"
 
 	rt "github.com/OctoSucker/octosucker/repo/routegraph"
 )
 
 type Plan struct {
 	Steps []*PlanStep `json:"steps"`
+}
+
+// FormatForPlannerPrompt renders executed/pending steps as readable lines for the LLM planner user message.
+func (p *Plan) FormatForPlannerPrompt() (string, error) {
+	if p == nil || len(p.Steps) == 0 {
+		return "(none — no prior steps on this task)", nil
+	}
+	var b strings.Builder
+	for i, st := range p.Steps {
+		fmt.Fprintf(&b, "--- Step %d of %d ---\n", i+1, len(p.Steps))
+		fmt.Fprintf(&b, "Step ID: %s\n", st.ID)
+		fmt.Fprintf(&b, "Status: %s\n", st.Status)
+		fmt.Fprintf(&b, "Goal: %s\n", st.Goal)
+		fmt.Fprintf(&b, "Tool: %s\n", st.Node.Tool)
+		argBytes, err := json.Marshal(st.Arguments)
+		if err != nil {
+			return "", fmt.Errorf("plan: marshal step arguments for prompt: %w", err)
+		}
+		fmt.Fprintf(&b, "Arguments JSON: %s\n", string(argBytes))
+		if st.ToolResult.Err != nil {
+			fmt.Fprintf(&b, "Tool error: %v\n", st.ToolResult.Err)
+		} else {
+			out := st.PrimaryText()
+			if out != "" {
+				fmt.Fprintf(&b, "Tool output (compact):\n%s\n", out)
+			}
+		}
+	}
+	return b.String(), nil
 }
 
 func (p *Plan) FindStep(stepID string) *PlanStep {

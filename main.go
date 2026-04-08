@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/OctoSucker/octosucker/app"
 	"github.com/OctoSucker/octosucker/config"
@@ -23,6 +25,7 @@ func init() {
 func main() {
 	workspaceDir := flag.String("workspace", "", "agent workspace directory (contains config.json)")
 	enableCmd := flag.Bool("cmd", true, "enable local stdin REPL (set -cmd=false for non-interactive)")
+	webAddr := flag.String("web", "", "if set (e.g. 127.0.0.1:8090), serve web admin UI: chat + knowledge graph")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -60,8 +63,34 @@ func main() {
 		}
 	}()
 
-	if a.Telegram == nil && !*enableCmd {
-		fmt.Fprintln(os.Stderr, "octosucker: need telegram bot_token or local cmd (-cmd=true)")
+	var adminSrv *http.Server
+	if *webAddr != "" {
+		adminHandler, err := a.AdminHandler()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "octosucker:", err)
+			os.Exit(1)
+		}
+		adminSrv = &http.Server{Addr: *webAddr, Handler: adminHandler}
+		go func() {
+			fmt.Fprintf(os.Stderr, "admin web: http://%s\n", *webAddr)
+			if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("admin web: %v", err)
+			}
+		}()
+	}
+	defer func() {
+		if adminSrv == nil {
+			return
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := adminSrv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("admin web shutdown: %v", err)
+		}
+	}()
+
+	if a.Telegram == nil && !*enableCmd && *webAddr == "" {
+		fmt.Fprintln(os.Stderr, "octosucker: need telegram bot_token, local cmd (-cmd=true), or -web address")
 		os.Exit(1)
 	}
 

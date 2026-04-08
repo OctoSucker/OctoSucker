@@ -47,6 +47,7 @@ func (x *StepCritic) HandleObservationReady(ctx context.Context, pl types.Payloa
 			log.Printf("------step_critic:  error: %+v", err)
 			return nil, err
 		}
+		log.Printf("step_critic: task=%s step=%s tool=%s err -> replan UserInput", pl.TaskID, pl.StepID, step.Node.Tool)
 		return types.EventPtr(types.Event{
 			Type: types.EvUserInput,
 			Payload: types.PayloadUserInput{
@@ -70,8 +71,8 @@ func (x *StepCritic) HandleObservationReady(ctx context.Context, pl types.Payloa
 			return nil, err
 		}
 		return types.EventPtr(types.Event{
-			Type: types.EvPlanProgressed,
-			Payload: types.PayloadPlanProgressed{
+			Type: types.EvTrajectoryCheck,
+			Payload: types.PayloadTrajectoryCheck{
 				TaskID: pl.TaskID,
 			},
 		}), nil

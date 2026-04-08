@@ -8,15 +8,15 @@ import (
 	"strings"
 
 	"github.com/OctoSucker/octosucker/engine/types"
+	"github.com/OctoSucker/octosucker/pkg/llmclient"
 	"github.com/OctoSucker/octosucker/repo/knowledge"
 	"github.com/OctoSucker/octosucker/store"
-	"github.com/OctoSucker/octosucker/pkg/llmclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
-	ToolAddNode            = "kg_add_node"
 	ToolAddEdge            = "kg_add_edge"
+	ToolAddEdgesBatch      = "kg_add_edges_batch"
 	ToolLookupNodeExact    = "kg_lookup_node_exact"
 	ToolLookupNodeSemantic = "kg_lookup_node_semantic"
 	ToolListNodes          = "kg_list_nodes"
@@ -69,7 +69,7 @@ func (r *Runner) Name() (string, string) {
 
 func (r *Runner) HasTool(name string) bool {
 	switch strings.TrimSpace(name) {
-	case ToolAddNode, ToolAddEdge, ToolLookupNodeExact, ToolLookupNodeSemantic, ToolListNodes, ToolListEdges:
+	case ToolAddEdge, ToolAddEdgesBatch, ToolLookupNodeExact, ToolLookupNodeSemantic, ToolListNodes, ToolListEdges:
 		return true
 	default:
 		return false
@@ -78,17 +78,17 @@ func (r *Runner) HasTool(name string) bool {
 
 func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
 	switch strings.TrimSpace(tool) {
-	case ToolAddNode:
-		return &mcp.Tool{
-			Name:        ToolAddNode,
-			Description: "Add a canonical knowledge-graph node id; stores an embedding for kg_lookup_node_semantic.",
-			InputSchema: schemaAddNode(),
-		}, nil
 	case ToolAddEdge:
 		return &mcp.Tool{
 			Name:        ToolAddEdge,
-			Description: "Add a directed influence edge between existing node ids. Use positive=false for negative correlation.",
+			Description: "Add a directed influence edge from_id → to_id. Creates both endpoint nodes (with embeddings) if they do not exist. Use positive=false for negative correlation.",
 			InputSchema: schemaAddEdge(),
+		}, nil
+	case ToolAddEdgesBatch:
+		return &mcp.Tool{
+			Name:        ToolAddEdgesBatch,
+			Description: "Add multiple directed influence edges. Each edge creates endpoint nodes (with embeddings) if missing.",
+			InputSchema: schemaAddEdgesBatch(),
 		}, nil
 	case ToolLookupNodeExact:
 		return &mcp.Tool{
@@ -120,7 +120,7 @@ func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
 }
 
 func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
-	names := []string{ToolAddNode, ToolAddEdge, ToolLookupNodeExact, ToolLookupNodeSemantic, ToolListNodes, ToolListEdges}
+	names := []string{ToolAddEdge, ToolAddEdgesBatch, ToolLookupNodeExact, ToolLookupNodeSemantic, ToolListNodes, ToolListEdges}
 	out := make([]*mcp.Tool, 0, len(names))
 	for _, n := range names {
 		t, err := r.Tool(n)
@@ -137,16 +137,6 @@ func (r *Runner) Invoke(ctx context.Context, localTool string, arguments map[str
 		return types.ToolResult{Err: fmt.Errorf("kg_graph builtin: not initialized")}, fmt.Errorf("kg_graph builtin: not initialized")
 	}
 	switch localTool {
-	case ToolAddNode:
-		id, err := parseRequiredString(arguments, ToolAddNode, "id")
-		if err != nil {
-			return types.ToolResult{Err: err}, err
-		}
-		if err := r.g.AddNode(ctx, id); err != nil {
-			return types.ToolResult{Err: err}, err
-		}
-		return types.ToolResult{Output: map[string]any{"id": id, "added": true}}, nil
-
 	case ToolAddEdge:
 		fromID, err := parseRequiredString(arguments, ToolAddEdge, "from_id")
 		if err != nil {
@@ -160,10 +150,46 @@ func (r *Runner) Invoke(ctx context.Context, localTool string, arguments map[str
 		if err != nil {
 			return types.ToolResult{Err: err}, err
 		}
+		if err := r.g.EnsureNode(ctx, fromID); err != nil {
+			return types.ToolResult{Err: err}, err
+		}
+		if err := r.g.EnsureNode(ctx, toID); err != nil {
+			return types.ToolResult{Err: err}, err
+		}
 		if err := r.g.AddEdge(fromID, toID, positive); err != nil {
 			return types.ToolResult{Err: err}, err
 		}
 		return types.ToolResult{Output: map[string]any{"from_id": fromID, "to_id": toID, "positive": positive}}, nil
+
+	case ToolAddEdgesBatch:
+		edges, err := parseBatchEdges(arguments)
+		if err != nil {
+			return types.ToolResult{Err: err}, err
+		}
+		added := make([]map[string]any, 0, len(edges))
+		for i, e := range edges {
+			if err := r.g.EnsureNode(ctx, e.FromID); err != nil {
+				wrapped := fmt.Errorf("kg_graph builtin: %s: edge[%d]: ensure from_id %q: %w", ToolAddEdgesBatch, i, e.FromID, err)
+				return types.ToolResult{Err: wrapped}, wrapped
+			}
+			if err := r.g.EnsureNode(ctx, e.ToID); err != nil {
+				wrapped := fmt.Errorf("kg_graph builtin: %s: edge[%d]: ensure to_id %q: %w", ToolAddEdgesBatch, i, e.ToID, err)
+				return types.ToolResult{Err: wrapped}, wrapped
+			}
+			if err := r.g.AddEdge(e.FromID, e.ToID, e.Positive); err != nil {
+				wrapped := fmt.Errorf("kg_graph builtin: %s: edge[%d]: add edge %q -> %q: %w", ToolAddEdgesBatch, i, e.FromID, e.ToID, err)
+				return types.ToolResult{Err: wrapped}, wrapped
+			}
+			added = append(added, map[string]any{
+				"from_id":  e.FromID,
+				"to_id":    e.ToID,
+				"positive": e.Positive,
+			})
+		}
+		return types.ToolResult{Output: map[string]any{
+			"added_count": len(added),
+			"edges":       added,
+		}}, nil
 
 	case ToolLookupNodeExact:
 		term, err := parseRequiredString(arguments, ToolLookupNodeExact, "term")
@@ -244,36 +270,57 @@ func schemaTerm() map[string]any {
 	}
 }
 
-func schemaAddNode() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"id": map[string]any{
-				"type":        "string",
-				"description": "Canonical node id (stored as primary key)",
-			},
-		},
-		"additionalProperties": false,
-	}
-}
-
 func schemaAddEdge() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"from_id": map[string]any{
 				"type":        "string",
-				"description": "Source node id (must exist)",
+				"description": "Source node id; created with embedding if missing",
 			},
 			"to_id": map[string]any{
 				"type":        "string",
-				"description": "Target node id (must exist)",
+				"description": "Target node id; created with embedding if missing",
 			},
 			"positive": map[string]any{
 				"type":        "boolean",
 				"description": "True for positive correlation, false for negative; omit for true",
 			},
 		},
+		"required":             []string{"from_id", "to_id"},
+		"additionalProperties": false,
+	}
+}
+
+func schemaAddEdgesBatch() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"edges": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"from_id": map[string]any{
+							"type":        "string",
+							"description": "Source node id; created with embedding if missing",
+						},
+						"to_id": map[string]any{
+							"type":        "string",
+							"description": "Target node id; created with embedding if missing",
+						},
+						"positive": map[string]any{
+							"type":        "boolean",
+							"description": "True for positive correlation, false for negative; omit for true",
+						},
+					},
+					"required":             []string{"from_id", "to_id"},
+					"additionalProperties": false,
+				},
+				"minItems": 1,
+			},
+		},
+		"required":             []string{"edges"},
 		"additionalProperties": false,
 	}
 }
@@ -319,4 +366,48 @@ func parseOptionalPositive(args map[string]any) (bool, error) {
 	default:
 		return false, fmt.Errorf("kg_graph builtin: kg_add_edge: positive must be boolean")
 	}
+}
+
+type batchEdge struct {
+	FromID   string
+	ToID     string
+	Positive bool
+}
+
+func parseBatchEdges(args map[string]any) ([]batchEdge, error) {
+	if args == nil {
+		return nil, fmt.Errorf("kg_graph builtin: %s: arguments required", ToolAddEdgesBatch)
+	}
+	rawEdges, ok := args["edges"]
+	if !ok {
+		return nil, fmt.Errorf("kg_graph builtin: %s: edges is required", ToolAddEdgesBatch)
+	}
+	edgeItems, ok := rawEdges.([]any)
+	if !ok {
+		return nil, fmt.Errorf("kg_graph builtin: %s: edges must be an array", ToolAddEdgesBatch)
+	}
+	if len(edgeItems) == 0 {
+		return nil, fmt.Errorf("kg_graph builtin: %s: edges must be non-empty", ToolAddEdgesBatch)
+	}
+	edges := make([]batchEdge, 0, len(edgeItems))
+	for i, raw := range edgeItems {
+		obj, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("kg_graph builtin: %s: edge[%d] must be an object", ToolAddEdgesBatch, i)
+		}
+		fromID, err := parseRequiredString(obj, ToolAddEdgesBatch, "from_id")
+		if err != nil {
+			return nil, fmt.Errorf("kg_graph builtin: %s: edge[%d]: %w", ToolAddEdgesBatch, i, err)
+		}
+		toID, err := parseRequiredString(obj, ToolAddEdgesBatch, "to_id")
+		if err != nil {
+			return nil, fmt.Errorf("kg_graph builtin: %s: edge[%d]: %w", ToolAddEdgesBatch, i, err)
+		}
+		positive, err := parseOptionalPositive(obj)
+		if err != nil {
+			return nil, fmt.Errorf("kg_graph builtin: %s: edge[%d]: %w", ToolAddEdgesBatch, i, err)
+		}
+		edges = append(edges, batchEdge{FromID: fromID, ToID: toID, Positive: positive})
+	}
+	return edges, nil
 }

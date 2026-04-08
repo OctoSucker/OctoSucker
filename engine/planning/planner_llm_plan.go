@@ -4,181 +4,151 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 
 	"github.com/OctoSucker/octosucker/engine/types"
+	rt "github.com/OctoSucker/octosucker/repo/routegraph"
 	"github.com/OctoSucker/octosucker/repo/toolprovider/mcp"
 	"github.com/google/uuid"
 )
 
-func (p *Planner) buildLLMPlan(ctx context.Context, taskID string, task *types.Task, failureSummary string) (*types.Plan, error) {
-	systemPrompt, userRequest, err := p.buildPlannerSystemPrompt(task, failureSummary)
+// buildLLMPlan runs two LLM calls: (1) choose tool + goal with light planning rules, (2) fill arguments from that tool's schema only (+ prior steps as context).
+func (p *Planner) buildLLMPlan(ctx context.Context, taskID string, task *types.Task) (*types.PlanStep, error) {
+	prevSteps, err := task.Plan.FormatForPlannerPrompt()
 	if err != nil {
-		return nil, fmt.Errorf("planner: system prompt: %w", err)
-	}
-	log.Println("systemPrompt", systemPrompt)
-	log.Println("userRequest", userRequest)
-
-	var x llmPlanResponse
-	if err := p.PlannerLLM.CompleteJSON(ctx, systemPrompt, userRequest, &x); err != nil {
-		log.Printf("engine.Dispatcher: plan JSON parse failed task=%s err=%v", taskID, err)
-		return nil, fmt.Errorf("planner: llm plan json: %w", err)
-	}
-	if len(x.Steps) == 0 {
-		log.Printf("engine.Dispatcher: plan JSON had empty steps task=%s", taskID)
-		return nil, fmt.Errorf("planner: llm returned no steps (at least one step is required)")
+		return nil, fmt.Errorf("planner: format prior steps: %w", err)
 	}
 
-	parsed := &types.Plan{}
-	for _, st := range x.Steps {
-		t, err := p.ToolRegistry.Tool(st.Node.Tool)
-		if err != nil {
-			return nil, fmt.Errorf("planner: tool: %w", err)
-		}
-		if err := mcp.ValidateToolArguments(st.Node.Tool, st.Arguments, t.InputSchema); err != nil {
-			return nil, fmt.Errorf("planner: validate tool arguments: %w", err)
-		}
-		parsed.Steps = append(parsed.Steps, &types.PlanStep{
-			ID:        uuid.New().String(),
-			Goal:      st.Goal,
-			Node:      st.Node,
-			Arguments: st.Arguments,
-			Status:    "pending",
-		})
+	pickSys, pickUser, err := p.buildLLMPickStepPrompts(task, prevSteps)
+	if err != nil {
+		return nil, fmt.Errorf("planner: pick-step prompt: %w", err)
 	}
-	return parsed, nil
+
+	var pick llmPickStepResponse
+	if err := p.PlannerLLM.CompleteJSON(ctx, pickSys, pickUser, &pick); err != nil {
+		log.Printf("planner_llm: pick-step JSON failed task=%s err=%v", taskID, err)
+		return nil, fmt.Errorf("planner: llm pick-step json: %w", err)
+	}
+	toolID := strings.TrimSpace(pick.Node.Tool)
+	if toolID == "" {
+		return nil, fmt.Errorf("planner: llm pick-step missing node.tool")
+	}
+	goal := strings.TrimSpace(pick.Goal)
+	if goal == "" {
+		goal = task.UserInput
+	}
+
+	toolSpec, err := p.ToolRegistry.Tool(toolID)
+	if err != nil {
+		return nil, fmt.Errorf("planner: tool: %w", err)
+	}
+
+	argSys, argUser, err := p.buildToolArgumentsPromptPair(task.UserInput, toolID, prevSteps)
+	if err != nil {
+		return nil, fmt.Errorf("planner: tool arguments prompt: %w", err)
+	}
+	args := make(map[string]any)
+	if err := p.PlannerLLM.CompleteJSON(ctx, argSys, argUser, &args); err != nil {
+		log.Printf("planner_llm: args JSON failed task=%s tool=%s err=%v", taskID, toolID, err)
+		return nil, fmt.Errorf("planner: llm tool arguments json: %w", err)
+	}
+
+	if err := mcp.ValidateToolArguments(toolID, args, toolSpec.InputSchema); err != nil {
+		log.Printf("planner_llm: args=%v schema=%v err=%v", args, toolSpec.InputSchema, err)
+		return nil, fmt.Errorf("planner: validate tool arguments tool=%s schema=%v err=%w", toolID, toolSpec.InputSchema, err)
+	}
+
+	return &types.PlanStep{
+		ID:        uuid.New().String(),
+		Goal:      goal,
+		Node:      rt.Node{Tool: toolID},
+		Arguments: args,
+		Status:    "pending",
+	}, nil
 }
 
-func (p *Planner) buildPlannerSystemPrompt(task *types.Task, failureSummary string) (string, string, error) {
+func (p *Planner) buildLLMPickStepPrompts(task *types.Task, prevSteps string) (string, string, error) {
+	const pickSystemPrompt = `
+You are the planning module of an AI agent (step 1 of 2).
 
-	const systemPrompt = `
-You are the planning module of an AI agent.
+You only choose ONE next tool id and a short goal.
+Do not output arguments. Do not execute tools. Do not chat.
 
-You ONLY generate a plan using tools.
-You do NOT execute tools.
-You do NOT chat.
+Hard rules:
+1) Always read [PREVIOUS STEPS] first.
+2) If necessary and you don't have enough information from [PREVIOUS STEPS], read skills using tool "read_skill" and read tool lists using "list_tools_for_provider" to help you choose the next tool.
+3) If choosing list_tools_for_provider, the provider must be a provider id from [AVAILABLE TOOL PROVIDERS].
+4) Do not repeat list_tools_for_provider for a provider that already succeeded.
+5) If a step failed with Tool error, do not pick the same failing action again without a concrete change.
+6) When provider identity is uncertain, pick list_tool_providers first.
 
---------------------------------------------------
-PLAN DEFINITION
+Output format:
 
-A plan is an ordered list of tool calls.
-
-Each step:
-- calls exactly one tool
-- has a goal (outcome, not command)
-- has arguments (valid JSON)
-
-Steps must be minimal and complete.
-
---------------------------------------------------
-PLANNING FLOW (MANDATORY)
-
-For any task involving tools:
-
-1) list_tools_for_provider (for relevant providers)
-2) effect tool(s) to achieve the goal
-
-Do NOT:
-- skip discovery
-- call effect tools before discovery
-- repeat discovery steps
-
-Exception:
-If user only wants tool info → discovery only
-
---------------------------------------------------
-TOOL RULES
-
-Two tool types:
-
-1) Introspection tools → return metadata
-2) Effect tools → perform real actions
-
-If user wants something DONE:
-→ MUST include an effect tool
-
-Never end with only introspection tools unless explicitly requested.
-
---------------------------------------------------
-STEP RULES
-
-Goal:
-- describe outcome
-- NOT tool name
-
-Node:
-{ "tool": "exact_tool_id" }
-
-Arguments:
-- must match schema
-- use {} if empty
-
---------------------------------------------------
-REPLANNING (IMPORTANT)
-
-If LAST TOOL ERROR exists:
-
-- Do NOT repeat failing step
-- Fix arguments or tool choice
-- Add introspection if needed
-
---------------------------------------------------
-OUTPUT FORMAT (STRICT)
+Return JSON only, no markdown, no extra keys:
 
 {
-  "steps": [
-    {
-      "goal": "string",
-      "node": { "tool": "tool_id" },
-      "arguments": {}
-    }
-  ]
+  "goal": "short outcome description (not the raw tool name)",
+  "node": { "tool": "exact_tool_id" }
 }
-
-Rules:
-- valid JSON only
-- no extra text
-- steps ≥ 1
-
---------------------------------------------------
-CONSTRAINTS
-
-- Max 8 steps (prefer 3–5)
-- Use only AVAILABLE TOOLS
-- Do not invent tool names
-
---------------------------------------------------
-SELF CHECK
-
-- starts with discovery
-- includes effect tool if needed
-- no repeated discovery
-- valid JSON
 `
 
 	toolProvidersAppendix := p.ToolRegistry.ProviderDescriptors()
 	skillsAppendix := p.ToolRegistry.SkillsProvider.AllSkills()
+	traj := strings.TrimSpace(task.TrajectorySummary)
+	if traj == "" {
+		traj = "(none)"
+	}
 	userPrompt := fmt.Sprintf(`
 	[USER GOAL]
 	%s
-	
+
 	----------------------------------------
-	[AVAILABLE TOOL PROVIDERS, use "list_tools_for_provider" tool to get tools for a provider]
+	[AVAILABLE TOOL PROVIDERS — for tool "list_tools_for_provider"]
 	%s
 
 	----------------------------------------
-	[AVAILABLE skills PROVIDERS, use "read_skill" tool to get specific skill content]
+	[AVAILABLE skills — for tool "read_skill"]
 	%v
-	
-	----------------------------------------
-	[LAST TOOL ERROR]
-	%s
-	
-	Generate a new plan.
-	`, task.UserInput, toolProvidersAppendix, skillsAppendix, failureSummary)
 
-	return systemPrompt, userPrompt, nil
+	----------------------------------------
+	[PREVIOUS STEPS]
+	%s
+
+	----------------------------------------
+	[TRAJECTORY JUDGE NOTE]
+	%s
+
+	Pick exactly one next tool id and goal. Do not include arguments.
+	`, task.UserInput, toolProvidersAppendix, skillsAppendix, prevSteps, traj)
+
+	return pickSystemPrompt, userPrompt, nil
 }
 
-type llmPlanResponse struct {
-	Steps []types.PlanStep `json:"steps"`
+type llmPickStepResponse struct {
+	Goal string `json:"goal"`
+	Node struct {
+		Tool string `json:"tool"`
+	} `json:"node"`
+}
+
+func sortedArgKeys(m map[string]any) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func clipPlannerGoal(s string) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= 120 {
+		return s
+	}
+	return string(r[:120]) + "…"
 }

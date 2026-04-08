@@ -33,7 +33,7 @@ func (g *Graph) AllEdges() ([]Edge, error) {
 	}
 	out := make([]Edge, len(rows))
 	for i, r := range rows {
-		out[i] = Edge{From: r.FromID, To: r.ToID, Positive: r.Positive}
+		out[i] = Edge{FromID: r.FromID, ToID: r.ToID, Positive: r.Positive}
 	}
 	return out, nil
 }

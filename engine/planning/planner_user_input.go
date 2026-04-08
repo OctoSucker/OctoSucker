@@ -17,28 +17,32 @@ func (p *Planner) HandleUserInput(ctx context.Context, pl types.PayloadUserInput
 	}
 	task.UserInput = pl.Text
 
-	var buildPlan *types.Plan
 	var lastStep *types.PlanStep
-	var lastNode rt.Node
 	if len(task.Plan.Steps) > 0 {
 		lastStep = task.Plan.Steps[len(task.Plan.Steps)-1]
+	}
+	lastNode := rt.Node{}
+	if lastStep != nil {
 		lastNode = lastStep.Node
 	}
 	g := p.RouteGraph.Confidence(ctx, pl.Text, lastNode)
+	log.Printf("-----planner: task=%s route=graph confidence=%.3f", pl.TaskID, g)
 	if g >= graphRouteThreshold {
-		log.Println("building graph plan")
-		buildPlan, err = p.buildGraphPlan(ctx, pl.TaskID, task, pl)
+		buildStep, err := p.buildGraphPlan(ctx, pl.TaskID, task)
 		if err != nil {
+			log.Printf("planner: task=%s route=graph err=%v", pl.TaskID, err)
 			return nil, err
 		}
+		task.Plan.Steps = append(task.Plan.Steps, buildStep)
 	} else {
-		log.Println("building llm plan")
-		buildPlan, err = p.buildLLMPlan(ctx, pl.TaskID, task, lastStep.PrimaryText())
+		buildStep, err := p.buildLLMPlan(ctx, pl.TaskID, task)
 		if err != nil {
 			return nil, err
 		}
+		task.Plan.Steps = append(task.Plan.Steps, buildStep)
 	}
-	task.Plan.Steps = append(task.Plan.Steps, buildPlan.Steps...)
+	log.Printf("planner: task=%s plan_steps=%v", pl.TaskID, task.Plan.Steps[len(task.Plan.Steps)-1].Node.Tool)
+
 	if err := p.Tasks.Put(task); err != nil {
 		return nil, err
 	}

@@ -13,7 +13,7 @@ import (
 const (
 	// ListToolProvidersTool returns each tool provider’s stable id and description.
 	ListToolProvidersTool = "list_tool_providers"
-	// ListToolsForProviderTool returns tool names for one provider (id from list_tool_providers).
+	// ListToolsForProviderTool returns tool descriptors (name, description, input_schema) for one provider.
 	ListToolsForProviderTool = "list_tools_for_provider"
 )
 
@@ -89,7 +89,7 @@ func (r *introspectionBackend) ToolList(ctx context.Context) ([]*mcp.Tool, error
 		},
 		{
 			Name:        ListToolsForProviderTool,
-			Description: "List MCP tool names exposed by a single provider; use provider id from list_tool_providers.",
+			Description: "List tool descriptors exposed by one provider: name, description, and input_schema.",
 			InputSchema: registryListToolsForProviderSchema(),
 		},
 	}, nil
@@ -124,7 +124,7 @@ func (r *introspectionBackend) Invoke(ctx context.Context, localTool string, arg
 		if err != nil {
 			return types.ToolResult{Err: err}, err
 		}
-		tools, err := r.reg.ToolNamesForProvider(ctx, prov)
+		tools, err := r.reg.ToolDescriptorsForProvider(ctx, prov)
 		if err != nil {
 			return types.ToolResult{Err: err}, err
 		}
@@ -161,8 +161,14 @@ type ProviderDescriptor struct {
 	Description string `json:"description"`
 }
 
-// ToolNamesForProvider returns sorted MCP tool names exposed by the named provider (ProvidersMap key).
-func (r *Registry) ToolNamesForProvider(ctx context.Context, providerName string) ([]string, error) {
+type ToolDescriptor struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
+// ToolDescriptorsForProvider returns sorted tool descriptors exposed by the named provider (ProvidersMap key).
+func (r *Registry) ToolDescriptorsForProvider(ctx context.Context, providerName string) ([]ToolDescriptor, error) {
 	pname := strings.TrimSpace(providerName)
 	if pname == "" {
 		return nil, fmt.Errorf("tool registry: provider name is required")
@@ -175,12 +181,17 @@ func (r *Registry) ToolNamesForProvider(ctx context.Context, providerName string
 	if err != nil {
 		return nil, fmt.Errorf("tool registry: list tools for provider %q: %w", pname, err)
 	}
-	names := make([]string, 0, len(tools))
+	out := make([]ToolDescriptor, 0, len(tools))
 	for _, t := range tools {
 		if t != nil && t.Name != "" {
-			names = append(names, t.Name)
+			schema, _ := t.InputSchema.(map[string]any)
+			out = append(out, ToolDescriptor{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: schema,
+			})
 		}
 	}
-	sort.Strings(names)
-	return names, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }

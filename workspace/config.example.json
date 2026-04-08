@@ -27,5 +27,8 @@
     "default_chat_id": 1,
     "allowed_chat_ids": []
   },
-  "skills_dir": "skills"
+  "skills_dir": "skills",
+  "thinker": {
+    "knowledge_md_dir": "knowledge"
+  }
 }

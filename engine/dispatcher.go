@@ -1,4 +1,4 @@
-// Package engine wires the event loop: Planner (route + plan materialization), PlanExec (steps), ToolExec, Judge.
+// Package engine wires the event loop: Planner (route + plan materialization), PlanExec (step + tool invoke), Judge.
 package engine
 
 import (
@@ -12,11 +12,11 @@ import (
 	judgepkg "github.com/OctoSucker/octosucker/engine/judge"
 	"github.com/OctoSucker/octosucker/engine/planning"
 	"github.com/OctoSucker/octosucker/engine/types"
-	"github.com/OctoSucker/octosucker/repo/routegraph"
-	"github.com/OctoSucker/octosucker/repo/toolprovider"
-	"github.com/OctoSucker/octosucker/repo/taskstore"
-	"github.com/OctoSucker/octosucker/store"
 	"github.com/OctoSucker/octosucker/pkg/llmclient"
+	"github.com/OctoSucker/octosucker/repo/routegraph"
+	"github.com/OctoSucker/octosucker/repo/taskstore"
+	"github.com/OctoSucker/octosucker/repo/toolprovider"
+	"github.com/OctoSucker/octosucker/store"
 )
 
 const MaxSteps = 200
@@ -24,7 +24,7 @@ const MaxSteps = 200
 type Dispatcher struct {
 	Planner  *planning.Planner
 	Judge    *judgepkg.Judge
-	Executor *execution.AgentExecutor
+	PlanExec *execution.PlanExecutor
 }
 
 func NewDispatcher(
@@ -60,17 +60,18 @@ func NewDispatcher(
 		return nil, fmt.Errorf("dispatcher: planner: %w", err)
 	}
 
-	d := &Dispatcher{
+	return &Dispatcher{
 		Planner: planner,
 		Judge: judgepkg.NewJudge(
 			taskStore,
 			routeGraph,
 			trajectoryLLM,
 		),
-	}
-	d.Executor = execution.NewAgentExecutor(taskStore, toolRegistry)
-
-	return d, nil
+		PlanExec: &execution.PlanExecutor{
+			Tasks:        taskStore,
+			ToolRegistry: toolRegistry,
+		},
+	}, nil
 }
 
 func (d *Dispatcher) Run(ctx context.Context, start types.Event) error {
@@ -92,13 +93,7 @@ func (d *Dispatcher) Run(ctx context.Context, start types.Event) error {
 			if !ok {
 				return fmt.Errorf("dispatcher: invalid payload for %s", types.EvPlanProgressed)
 			}
-			out, err = d.Executor.PlanExec.HandlePlanProgressed(ctx, pl)
-		case types.EvToolCall:
-			pl, ok := evt.Payload.(types.PayloadToolCall)
-			if !ok {
-				return fmt.Errorf("dispatcher: invalid payload for %s", types.EvToolCall)
-			}
-			out, err = d.Executor.ToolExec.HandleToolCall(ctx, pl)
+			out, err = d.PlanExec.HandlePlanProgressed(ctx, pl)
 		case types.EvObservationReady:
 			pl, ok := evt.Payload.(types.PayloadObservation)
 			if !ok {
@@ -119,6 +114,7 @@ func (d *Dispatcher) Run(ctx context.Context, start types.Event) error {
 			return err
 		}
 		if out == nil {
+			log.Printf("dispatcher: iter=%d out=nil (turn end)", n)
 			return nil
 		}
 		evt = *out

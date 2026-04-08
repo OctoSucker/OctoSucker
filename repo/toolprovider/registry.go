@@ -14,6 +14,7 @@ import (
 	execbuiltin "github.com/OctoSucker/octosucker/repo/toolprovider/builtin/exec"
 	kggraph "github.com/OctoSucker/octosucker/repo/toolprovider/builtin/kg_graph"
 	skillsbuiltin "github.com/OctoSucker/octosucker/repo/toolprovider/builtin/skills"
+	thinkerbuiltin "github.com/OctoSucker/octosucker/repo/toolprovider/builtin/thinker"
 	telegrambuiltin "github.com/OctoSucker/octosucker/repo/toolprovider/builtin/telegram"
 	mcpstore "github.com/OctoSucker/octosucker/repo/toolprovider/mcp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -75,6 +76,13 @@ func NewRegistry(
 	}
 	catID, _ := catalogRunner.Name()
 	r.ProvidersMap[catID] = catalogRunner
+
+	thinkerRunner, err := thinkerbuiltin.NewRunner(embedLLM)
+	if err != nil {
+		return nil, fmt.Errorf("tool registry: thinker builtin: %w", err)
+	}
+	thinkID, _ := thinkerRunner.Name()
+	r.ProvidersMap[thinkID] = thinkerRunner
 
 	if len(execCfg.WorkspaceDirs) == 0 {
 		return nil, fmt.Errorf("tool registry: exec.workspace_dirs is required for cronjob builtin")
