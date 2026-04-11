@@ -1,4 +1,4 @@
-// Package config loads workspace config.json (OpenAI, MCP, exec sandbox, Telegram, skills_dir).
+// Package config loads workspace config.json (OpenAI, MCP, exec sandbox, HTTP admin UI, Telegram, skills_dir).
 // Paths are resolved relative to the workspace root passed to LoadWorkspace.
 package config
 
@@ -34,6 +34,7 @@ type OpenAI struct {
 	EmbeddingModel string `json:"embedding_model"`
 }
 
+// HTTP configures the optional admin web UI (chat + knowledge graph). Empty listen disables it.
 type HTTP struct {
 	Listen string `json:"listen"`
 }

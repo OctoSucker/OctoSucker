@@ -20,7 +20,7 @@
     "container_user": "65532:65532"
   },
   "http": {
-    "listen": ":8080"
+    "listen": "127.0.0.1:8090"
   },
   "telegram": {
     "bot_token": "YOUR_BOT_TOKEN",

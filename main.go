@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,7 +26,6 @@ func init() {
 func main() {
 	workspaceDir := flag.String("workspace", "", "agent workspace directory (contains config.json)")
 	enableCmd := flag.Bool("cmd", true, "enable local stdin REPL (set -cmd=false for non-interactive)")
-	webAddr := flag.String("web", "", "if set (e.g. 127.0.0.1:8090), serve web admin UI: chat + knowledge graph")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -42,6 +42,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "octosucker:", err)
 		os.Exit(1)
 	}
+
+	adminListen := strings.TrimSpace(cfg.HTTP.Listen)
 
 	logFile, logPath, err := workspacelog.OpenFile(wsRoot, "agent.log")
 	if err != nil {
@@ -64,15 +66,15 @@ func main() {
 	}()
 
 	var adminSrv *http.Server
-	if *webAddr != "" {
+	if adminListen != "" {
 		adminHandler, err := a.AdminHandler()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "octosucker:", err)
 			os.Exit(1)
 		}
-		adminSrv = &http.Server{Addr: *webAddr, Handler: adminHandler}
+		adminSrv = &http.Server{Addr: adminListen, Handler: adminHandler}
 		go func() {
-			fmt.Fprintf(os.Stderr, "admin web: http://%s\n", *webAddr)
+			fmt.Fprintf(os.Stderr, "admin web: http://%s\n", adminListen)
 			if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("admin web: %v", err)
 			}
@@ -89,8 +91,8 @@ func main() {
 		}
 	}()
 
-	if a.Telegram == nil && !*enableCmd && *webAddr == "" {
-		fmt.Fprintln(os.Stderr, "octosucker: need telegram bot_token, local cmd (-cmd=true), or -web address")
+	if a.Telegram == nil && !*enableCmd && adminListen == "" {
+		fmt.Fprintln(os.Stderr, "octosucker: need telegram bot_token, local cmd (-cmd=true), or http.listen (admin web) in config.json")
 		os.Exit(1)
 	}
 
