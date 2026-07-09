@@ -49,6 +49,7 @@ type Telegram struct {
 const (
 	ExecBackendDocker           = "docker"
 	ExecBackendMacOSSandboxExec = "macos_sandbox_exec"
+	ExecBackendHost             = "host"
 )
 
 type Exec struct {
@@ -100,9 +101,9 @@ func LoadWorkspace(workspaceRoot string) (*Workspace, error) {
 	switch strings.TrimSpace(cfg.Exec.Backend) {
 	case "":
 		cfg.Exec.Backend = ExecBackendDocker
-	case ExecBackendDocker, ExecBackendMacOSSandboxExec:
+	case ExecBackendDocker, ExecBackendMacOSSandboxExec, ExecBackendHost:
 	default:
-		return nil, fmt.Errorf("parse %s: exec.backend must be %q or %q", p, ExecBackendDocker, ExecBackendMacOSSandboxExec)
+		return nil, fmt.Errorf("parse %s: exec.backend must be %q, %q, or %q", p, ExecBackendDocker, ExecBackendMacOSSandboxExec, ExecBackendHost)
 	}
 	if cfg.Exec.Backend == ExecBackendMacOSSandboxExec {
 		prof := strings.TrimSpace(cfg.Exec.MacOSSandboxProfile)
@@ -148,9 +149,12 @@ func LoadWorkspace(workspaceRoot string) (*Workspace, error) {
 		cfg.Exec.ContainerReadOnlyRoot = true
 	}
 	if cfg.SkillsDir == "" {
-		cfg.SkillsDir = filepath.Join(workspaceRoot, "agent", "workspace", "skills")
+		cfg.SkillsDir = filepath.Join(workspaceRoot, "skills")
 	} else if !filepath.IsAbs(cfg.SkillsDir) {
 		cfg.SkillsDir = filepath.Clean(filepath.Join(workspaceRoot, cfg.SkillsDir))
+	}
+	if err := ensureOwnedDir(cfg.SkillsDir); err != nil {
+		return nil, fmt.Errorf("parse %s: skills_dir %q: %w", p, cfg.SkillsDir, err)
 	}
 	if cfg.Thinker.KnowledgeMDDir == "" {
 		cfg.Thinker.KnowledgeMDDir = "knowledge"
@@ -162,5 +166,25 @@ func LoadWorkspace(workspaceRoot string) (*Workspace, error) {
 		mdDir = filepath.Clean(mdDir)
 	}
 	cfg.Thinker.KnowledgeMDDir = mdDir
+	if err := ensureOwnedDir(cfg.Thinker.KnowledgeMDDir); err != nil {
+		return nil, fmt.Errorf("parse %s: thinker.knowledge_md_dir %q: %w", p, cfg.Thinker.KnowledgeMDDir, err)
+	}
 	return &cfg, nil
+}
+
+func ensureOwnedDir(dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return fmt.Errorf("directory is required")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("not a directory")
+	}
+	return nil
 }

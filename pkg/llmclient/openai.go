@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -16,6 +17,11 @@ type OpenAI struct {
 	Model          string
 	EmbeddingModel string
 }
+
+const (
+	defaultCompleteTimeout = 45 * time.Second
+	defaultEmbedTimeout    = 20 * time.Second
+)
 
 func NewOpenAI(baseURL, apiKey, model, embeddingModel string) *OpenAI {
 	var opts []option.RequestOption
@@ -36,6 +42,9 @@ func (c *OpenAI) Complete(ctx context.Context, systemMsg string, userMsg string)
 	if c.Model == "" {
 		return "", fmt.Errorf("llmclient.OpenAI: model required")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultCompleteTimeout)
+	defer cancel()
+
 	m := shared.ChatModel(c.Model)
 	res, err := c.Client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Model: m,
@@ -69,21 +78,85 @@ func (c *OpenAI) CompleteJSON(ctx context.Context, system string, user string, o
 	if err != nil {
 		return err
 	}
-	content := strings.TrimSpace(raw)
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	content = strings.TrimSpace(content)
+	content := normalizeJSONCompletion(raw)
 	if err := json.Unmarshal([]byte(content), out); err != nil {
 		return fmt.Errorf("llmclient.OpenAI: unmarshal completion json: %w", err)
 	}
 	return nil
 }
 
+func normalizeJSONCompletion(raw string) string {
+	content := strings.TrimSpace(raw)
+	if strings.HasPrefix(content, "```") {
+		if i := strings.Index(content, "\n"); i >= 0 {
+			content = content[i+1:]
+		}
+		content = strings.TrimSpace(strings.TrimSuffix(content, "```"))
+	}
+	if extracted, ok := extractBalancedJSON(content); ok {
+		return extracted
+	}
+	return strings.TrimSpace(content)
+}
+
+func extractBalancedJSON(s string) (string, bool) {
+	start := -1
+	for i, r := range s {
+		if r == '{' || r == '[' {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return "", false
+	}
+
+	var stack []rune
+	inString := false
+	escaped := false
+	for i, r := range s[start:] {
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch r {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		switch r {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, r)
+		case '}', ']':
+			if len(stack) == 0 {
+				return "", false
+			}
+			open := stack[len(stack)-1]
+			if (open == '{' && r != '}') || (open == '[' && r != ']') {
+				return "", false
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				return strings.TrimSpace(s[start : start+i+len(string(r))]), true
+			}
+		}
+	}
+	return "", false
+}
+
 func (c *OpenAI) Embed(ctx context.Context, text string) ([]float32, error) {
 	if c.EmbeddingModel == "" {
 		return nil, fmt.Errorf("llmclient.OpenAI: embedding model required")
 	}
+	ctx, cancel := withDefaultTimeout(ctx, defaultEmbedTimeout)
+	defer cancel()
+
 	model := openai.EmbeddingModel(c.EmbeddingModel)
 	res, err := c.Client.Embeddings.New(ctx, openai.EmbeddingNewParams{
 		Model: model,
@@ -103,4 +176,14 @@ func (c *OpenAI) Embed(ctx context.Context, text string) ([]float32, error) {
 		out[i] = float32(emb[i])
 	}
 	return out, nil
+}
+
+func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), timeout)
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
 }

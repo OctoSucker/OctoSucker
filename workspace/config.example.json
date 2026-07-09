@@ -2,7 +2,7 @@
   "openai": {
     "api_key": "sk-xxx",
     "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4o-mini",
+    "model": "gpt-5.1",
     "embedding_model": "text-embedding-3-small"
   },
   "mcp_endpoint": [],
@@ -23,8 +23,8 @@
     "listen": "127.0.0.1:8090"
   },
   "telegram": {
-    "bot_token": "YOUR_BOT_TOKEN",
-    "default_chat_id": 1,
+    "bot_token": "",
+    "default_chat_id": 0,
     "allowed_chat_ids": []
   },
   "skills_dir": "skills",

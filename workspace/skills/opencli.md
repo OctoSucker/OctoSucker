@@ -56,7 +56,7 @@ OpenCLI 的进程 argv 形如：`opencli <一级子命令> <二级子命令> …
 1. 从链接 `https://x.com/<user>/status/<数字ID>` 取出最后的 **`<数字ID>`**（snowflake，例如 `2040280672758345783`）。
 2. 使用工具 `run_command` 时：
    - `program`: `opencli`
-   - `args`: `["twitter", "thread", "<数字ID>", "-f", "md"]`（`md` 便于下游模型与 `kg_graph` 使用；可按需改成 `json`）
+   - `args`: `["twitter", "thread", "<数字ID>", "-f", "md"]`（`md` 便于下游模型或外部知识图工具使用；可按需改成 `json`）
 
 示例（对应上面的 URL）：
 
