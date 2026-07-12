@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/robfig/cron/v3"
 )

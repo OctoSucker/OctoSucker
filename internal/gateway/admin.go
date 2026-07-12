@@ -10,7 +10,8 @@ import (
 // adminHTTPHandler serves the admin shell and JSON APIs via [adminhttp.Handler].
 func adminHTTPHandler(agent Agent) (http.Handler, error) {
 	return adminhttp.Handler(adminhttp.Options{
-		RunChat: agent.RunTurn,
+		RunChat:         agent.RunTurn,
+		PlanInteraction: agent.PlanInteraction,
 		Graph: func() storage.KnowledgeGraphReader {
 			return agent.WorkspaceDB()
 		},

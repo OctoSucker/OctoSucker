@@ -24,7 +24,7 @@ func Handler(opts Options) (http.Handler, error) {
 	}
 	mux := http.NewServeMux()
 	root.Register(mux, index)
-	chat.Register(mux, opts.RunChat)
+	chat.Register(mux, opts.RunChat, opts.PlanInteraction)
 	graph.Register(mux, opts.Graph)
 	return localCORSMiddleware(mux), nil
 }

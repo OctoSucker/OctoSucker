@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 	"github.com/OctoSucker/octosucker/pkg/llmclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

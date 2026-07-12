@@ -1,2 +1,3 @@
-// Package toolrouting implements the learned tool routing graph used by runtime planning and evaluation.
+// Package toolrouting stores semantic tool-transition outcomes and exposes only
+// conservative recommendations to planning. It never selects actions directly.
 package toolrouting

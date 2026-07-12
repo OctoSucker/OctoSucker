@@ -1,9 +1,27 @@
 {
   "openai": {
     "api_key": "sk-xxx",
-    "base_url": "https://api.openai.com/v1",
-    "model": "gpt-5.1",
-    "embedding_model": "text-embedding-3-small"
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "models": {
+      "planner": {
+        "name": "qwen3.7-max",
+        "enable_thinking": true
+      },
+      "evaluator": {
+        "name": "qwen3.7-plus",
+        "enable_thinking": true
+      },
+      "responder": {
+        "name": "qwen3.6-flash",
+        "enable_thinking": false
+      }
+    },
+    "embedding_model": "text-embedding-v3"
+  },
+  "context": {
+    "planner_input_tokens": 64000,
+    "evaluator_input_tokens": 48000,
+    "responder_input_tokens": 64000
   },
   "mcp_endpoint": [],
   "exec": {
@@ -26,6 +44,26 @@
     "bot_token": "",
     "default_chat_id": 0,
     "allowed_chat_ids": []
+  },
+  "opencli": {
+    "command": "",
+    "command_timeout_sec": 90,
+    "commands": {
+      "twitter": [
+        "article",
+        "bookmarks",
+        "following",
+        "list-tweets",
+        "lists",
+        "notifications",
+        "profile",
+        "search",
+        "thread",
+        "timeline",
+        "trending",
+        "tweets"
+      ]
+    }
   },
   "skills_dir": "skills",
   "thinker": {

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/OctoSucker/octosucker/config"
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -216,6 +216,7 @@ func ToolInputSchema() map[string]any {
 				"additionalProperties": map[string]any{"type": "string"},
 			},
 		},
+		"required":             []string{"program"},
 		"additionalProperties": false,
 	}
 }

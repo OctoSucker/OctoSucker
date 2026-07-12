@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/OctoSucker/octosucker/config"
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

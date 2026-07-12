@@ -13,7 +13,7 @@ type Graph struct {
 	mu                sync.RWMutex
 	db                *storage.DB
 	edges             map[storage.EdgeKey]*storage.RoutingEdgeRow
-	catalogTools      []*Node // registered tools; Frontier always scores next hop among these
+	catalogTools      []Node
 	recentTransitions []storage.ContextTransition
 }
 
@@ -26,7 +26,7 @@ func New(db *storage.DB, toolIDs []string) (*Graph, error) {
 	g := &Graph{
 		db:           db,
 		edges:        make(map[storage.EdgeKey]*storage.RoutingEdgeRow),
-		catalogTools: toolPtrsFromIDs(toolIDs),
+		catalogTools: toolNodesFromIDs(toolIDs),
 	}
 	if err := g.loadFromStore(); err != nil {
 		return nil, err
@@ -34,11 +34,10 @@ func New(db *storage.DB, toolIDs []string) (*Graph, error) {
 	return g, nil
 }
 
-func toolPtrsFromIDs(ids []string) []*Node {
-	out := make([]*Node, 0, len(ids))
+func toolNodesFromIDs(ids []string) []Node {
+	out := make([]Node, 0, len(ids))
 	for _, id := range ids {
-		n := Node{Tool: id}
-		out = append(out, &n)
+		out = append(out, Node{Tool: id})
 	}
 	return out
 }

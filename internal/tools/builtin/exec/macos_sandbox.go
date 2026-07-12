@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/OctoSucker/octosucker/config"
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 )
 
 const macOSSandboxExecBinary = "/usr/bin/sandbox-exec"

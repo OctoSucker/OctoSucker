@@ -1,11 +1,4 @@
-// Package runtime owns the workspace-scoped agent runtime.
-//
-// Layout:
-//   - runtime.go / dispatcher.go: top-level runtime lifecycle and event loop wiring
-//   - model: task, plan, event, payload, and tool result types
-//   - planning: next-step selection and tool-argument generation
-//   - execution: synchronous plan-step execution
-//   - judge: step-level and trajectory-level feedback
-//
-// See DESIGN.md in this directory for the runtime state-machine contract.
+// Package runtime composes the workspace-scoped serial agent loop. Domain
+// capabilities enter through tools and skills; the loop itself remains generic.
+// See DESIGN.md for module and state contracts.
 package runtime

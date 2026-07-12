@@ -4,18 +4,16 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/OctoSucker/octosucker/config"
-	"github.com/OctoSucker/octosucker/internal/storage"
-	catalogbuiltin "github.com/OctoSucker/octosucker/internal/tools/builtin/catalog"
 	cronjobbuiltin "github.com/OctoSucker/octosucker/internal/tools/builtin/cronjob"
 	execbuiltin "github.com/OctoSucker/octosucker/internal/tools/builtin/exec"
-	marketintelbuiltin "github.com/OctoSucker/octosucker/internal/tools/builtin/marketintel"
 	skillsbuiltin "github.com/OctoSucker/octosucker/internal/tools/builtin/skills"
 	telegrambuiltin "github.com/OctoSucker/octosucker/internal/tools/builtin/telegram"
 	thinkerbuiltin "github.com/OctoSucker/octosucker/internal/tools/builtin/thinker"
 	mcpstore "github.com/OctoSucker/octosucker/internal/tools/mcp"
-	"github.com/OctoSucker/octosucker/internal/tools/skillcli"
+	opencliprovider "github.com/OctoSucker/octosucker/internal/tools/opencli"
 	"github.com/OctoSucker/octosucker/pkg/llmclient"
 )
 
@@ -42,23 +40,20 @@ func validateWorkspaceRoot(workspaceRoot string) (string, error) {
 	return root, nil
 }
 
-func (r *Registry) registerBuiltins(workspaceRoot string, openAI config.OpenAI, data *storage.DB, execCfg config.Exec, telegramCfg config.Telegram, skillsDir string, embedLLM *llmclient.OpenAI) error {
+func (r *Registry) registerBuiltins(ctx context.Context, workspaceRoot string, execCfg config.Exec, telegramCfg config.Telegram, openCLICfg config.OpenCLI, skillsDir string, embedLLM *llmclient.OpenAI) error {
 	if err := r.registerExecProvider(execCfg); err != nil {
 		return err
 	}
 	if err := r.registerTelegramProvider(telegramCfg); err != nil {
 		return err
 	}
-	if err := r.registerSkillsProvider(workspaceRoot, openAI, skillsDir); err != nil {
+	if err := r.registerSkillsProvider(skillsDir); err != nil {
 		return err
 	}
-	if err := r.registerCatalogProvider(embedLLM); err != nil {
+	if err := r.registerOpenCLIProvider(ctx, openCLICfg); err != nil {
 		return err
 	}
 	if err := r.registerThinkerProvider(embedLLM); err != nil {
-		return err
-	}
-	if err := r.registerMarketIntelProvider(embedLLM); err != nil {
 		return err
 	}
 	if err := r.registerCronjobProvider(workspaceRoot); err != nil {
@@ -68,6 +63,21 @@ func (r *Registry) registerBuiltins(workspaceRoot string, openAI config.OpenAI, 
 		return err
 	}
 	return nil
+}
+
+func (r *Registry) registerOpenCLIProvider(ctx context.Context, cfg config.OpenCLI) error {
+	if strings.TrimSpace(cfg.Command) == "" {
+		return nil
+	}
+	provider, err := opencliprovider.NewProvider(ctx, opencliprovider.Options{
+		Command:  cfg.Command,
+		Commands: cfg.Commands,
+		Timeout:  time.Duration(cfg.CommandTimeoutSec) * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("tool registry: opencli provider: %w", err)
+	}
+	return r.addProvider(provider)
 }
 
 func (r *Registry) registerExecProvider(execCfg config.Exec) error {
@@ -89,7 +99,7 @@ func (r *Registry) registerTelegramProvider(cfg config.Telegram) error {
 	return r.addProvider(tg)
 }
 
-func (r *Registry) registerSkillsProvider(workspaceRoot string, openAI config.OpenAI, skillsDir string) error {
+func (r *Registry) registerSkillsProvider(skillsDir string) error {
 	skillRunner, err := skillsbuiltin.NewRunner(skillsDir)
 	if err != nil {
 		return fmt.Errorf("tool registry: skills runner: %w", err)
@@ -98,27 +108,7 @@ func (r *Registry) registerSkillsProvider(workspaceRoot string, openAI config.Op
 		return err
 	}
 	r.skillsProvider = skillRunner
-	for _, skill := range skillRunner.AllSkills() {
-		if skill.CLIPlugin == nil {
-			continue
-		}
-		provider, err := skillcli.NewProvider(workspaceRoot, openAI, skill)
-		if err != nil {
-			return fmt.Errorf("tool registry: skill cli plugin %q: %w", skill.Name, err)
-		}
-		if err := r.addProvider(provider); err != nil {
-			return err
-		}
-	}
 	return nil
-}
-
-func (r *Registry) registerCatalogProvider(embedLLM *llmclient.OpenAI) error {
-	catalogRunner, err := catalogbuiltin.NewRunner(embedLLM)
-	if err != nil {
-		return fmt.Errorf("tool registry: catalog runner: %w", err)
-	}
-	return r.addProvider(catalogRunner)
 }
 
 func (r *Registry) registerThinkerProvider(embedLLM *llmclient.OpenAI) error {
@@ -127,14 +117,6 @@ func (r *Registry) registerThinkerProvider(embedLLM *llmclient.OpenAI) error {
 		return fmt.Errorf("tool registry: thinker builtin: %w", err)
 	}
 	return r.addProvider(thinkerRunner)
-}
-
-func (r *Registry) registerMarketIntelProvider(llm *llmclient.OpenAI) error {
-	runner, err := marketintelbuiltin.NewRunner(llm)
-	if err != nil {
-		return fmt.Errorf("tool registry: marketintel builtin: %w", err)
-	}
-	return r.addProvider(runner)
 }
 
 func (r *Registry) registerCronjobProvider(workspaceRoot string) error {

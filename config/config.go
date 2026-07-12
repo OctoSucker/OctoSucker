@@ -1,4 +1,5 @@
-// Package config loads workspace config.json (OpenAI, MCP, exec sandbox, HTTP admin UI, Telegram, skills_dir).
+// Package config loads workspace config.json (OpenAI, MCP, exec sandbox, HTTP,
+// Telegram, OpenCLI, and Agent Skills settings).
 // Paths are resolved relative to the workspace root passed to LoadWorkspace.
 package config
 
@@ -14,10 +15,12 @@ import (
 
 type Workspace struct {
 	OpenAI      OpenAI   `json:"openai"`
+	Context     Context  `json:"context"`
 	MCPEndpoint []string `json:"mcp_endpoint"`
 	Exec        Exec     `json:"exec"`
 	HTTP        HTTP     `json:"http"`
 	Telegram    Telegram `json:"telegram"`
+	OpenCLI     OpenCLI  `json:"opencli"`
 	SkillsDir   string   `json:"skills_dir"` // based on workspace root
 	Thinker     Thinker  `json:"thinker"`
 }
@@ -28,10 +31,27 @@ type Thinker struct {
 }
 
 type OpenAI struct {
-	APIKey         string `json:"api_key"`
-	BaseURL        string `json:"base_url"`
-	Model          string `json:"model"`
-	EmbeddingModel string `json:"embedding_model"`
+	APIKey         string     `json:"api_key"`
+	BaseURL        string     `json:"base_url"`
+	Models         RoleModels `json:"models"`
+	EmbeddingModel string     `json:"embedding_model"`
+}
+
+type RoleModels struct {
+	Planner   Model `json:"planner"`
+	Evaluator Model `json:"evaluator"`
+	Responder Model `json:"responder"`
+}
+
+type Model struct {
+	Name           string `json:"name"`
+	EnableThinking *bool  `json:"enable_thinking,omitempty"`
+}
+
+type Context struct {
+	PlannerInputTokens   int `json:"planner_input_tokens"`
+	EvaluatorInputTokens int `json:"evaluator_input_tokens"`
+	ResponderInputTokens int `json:"responder_input_tokens"`
 }
 
 // HTTP configures the optional admin web UI (chat + knowledge graph). Empty listen disables it.
@@ -43,6 +63,14 @@ type Telegram struct {
 	BotToken       string  `json:"bot_token"`
 	DefaultChatID  int64   `json:"default_chat_id"`
 	AllowedChatIDs []int64 `json:"allowed_chat_ids,omitempty"`
+}
+
+// OpenCLI configures the optional schema-generated OpenCLI tool provider.
+// Commands is an allowlist keyed by OpenCLI site/adapter name.
+type OpenCLI struct {
+	Command           string              `json:"command"`
+	Commands          map[string][]string `json:"commands"`
+	CommandTimeoutSec int                 `json:"command_timeout_sec"`
 }
 
 // Exec sandbox backends (exec.backend JSON field).
@@ -78,6 +106,20 @@ func LoadWorkspace(workspaceRoot string) (*Workspace, error) {
 	var cfg Workspace
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", p, err)
+	}
+	if strings.TrimSpace(cfg.OpenAI.Models.Planner.Name) == "" ||
+		strings.TrimSpace(cfg.OpenAI.Models.Evaluator.Name) == "" ||
+		strings.TrimSpace(cfg.OpenAI.Models.Responder.Name) == "" {
+		return nil, fmt.Errorf("parse %s: openai.models planner, evaluator, and responder names are required", p)
+	}
+	if cfg.Context.PlannerInputTokens <= 0 {
+		cfg.Context.PlannerInputTokens = 64000
+	}
+	if cfg.Context.EvaluatorInputTokens <= 0 {
+		cfg.Context.EvaluatorInputTokens = 48000
+	}
+	if cfg.Context.ResponderInputTokens <= 0 {
+		cfg.Context.ResponderInputTokens = 64000
 	}
 	if len(cfg.Exec.WorkspaceDirs) == 0 {
 		cfg.Exec.WorkspaceDirs = []string{workspaceRoot}
@@ -148,6 +190,9 @@ func LoadWorkspace(workspaceRoot string) (*Workspace, error) {
 	if !cfg.Exec.ContainerReadOnlyRoot {
 		cfg.Exec.ContainerReadOnlyRoot = true
 	}
+	if err := normalizeOpenCLI(workspaceRoot, &cfg.OpenCLI); err != nil {
+		return nil, fmt.Errorf("parse %s: opencli: %w", p, err)
+	}
 	if cfg.SkillsDir == "" {
 		cfg.SkillsDir = filepath.Join(workspaceRoot, "skills")
 	} else if !filepath.IsAbs(cfg.SkillsDir) {
@@ -170,6 +215,50 @@ func LoadWorkspace(workspaceRoot string) (*Workspace, error) {
 		return nil, fmt.Errorf("parse %s: thinker.knowledge_md_dir %q: %w", p, cfg.Thinker.KnowledgeMDDir, err)
 	}
 	return &cfg, nil
+}
+
+func normalizeOpenCLI(workspaceRoot string, cfg *OpenCLI) error {
+	if cfg == nil {
+		return nil
+	}
+	cfg.Command = strings.TrimSpace(cfg.Command)
+	if cfg.Command == "" {
+		cfg.Commands = nil
+		return nil
+	}
+	if strings.ContainsRune(cfg.Command, os.PathSeparator) && !filepath.IsAbs(cfg.Command) {
+		cfg.Command = filepath.Clean(filepath.Join(workspaceRoot, cfg.Command))
+	}
+	if cfg.CommandTimeoutSec <= 0 {
+		cfg.CommandTimeoutSec = 90
+	}
+	if len(cfg.Commands) == 0 {
+		return fmt.Errorf("commands allowlist is required when command is configured")
+	}
+	normalized := make(map[string][]string, len(cfg.Commands))
+	for rawSite, rawCommands := range cfg.Commands {
+		site := strings.TrimSpace(rawSite)
+		if site == "" {
+			return fmt.Errorf("commands contains an empty site name")
+		}
+		seen := make(map[string]struct{})
+		for _, rawCommand := range rawCommands {
+			command := strings.TrimSpace(rawCommand)
+			if command == "" {
+				return fmt.Errorf("commands[%q] contains an empty command", site)
+			}
+			if _, exists := seen[command]; exists {
+				continue
+			}
+			seen[command] = struct{}{}
+			normalized[site] = append(normalized[site], command)
+		}
+		if len(normalized[site]) == 0 {
+			return fmt.Errorf("commands[%q] must contain at least one command", site)
+		}
+	}
+	cfg.Commands = normalized
+	return nil
 }
 
 func ensureOwnedDir(dir string) error {

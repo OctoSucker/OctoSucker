@@ -27,32 +27,9 @@ func preflightRunCommand(arguments map[string]any) error {
 		return nil
 	}
 	if isShell(program) {
-		return preflightShellCommand(arguments)
+		return preflightExecutable(program)
 	}
-	if err := preflightExecutable(program); err != nil {
-		return err
-	}
-	return preflightKnownProgram(program)
-}
-
-func preflightShellCommand(arguments map[string]any) error {
-	rawArgs, ok := arguments["args"].([]any)
-	if !ok || len(rawArgs) < 2 {
-		return nil
-	}
-	flag, _ := rawArgs[0].(string)
-	if flag != "-c" {
-		return nil
-	}
-	script, _ := rawArgs[1].(string)
-	for _, cmd := range []string{"us-market", "feishu-send"} {
-		if strings.Contains(script, cmd) {
-			if err := preflightKnownProgram(cmd); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return preflightExecutable(program)
 }
 
 func preflightExecutable(program string) error {
@@ -64,30 +41,6 @@ func preflightExecutable(program string) error {
 	}
 	if _, err := exec.LookPath(program); err != nil {
 		return fmt.Errorf("preflight: executable %q is not on PATH", program)
-	}
-	return nil
-}
-
-func preflightKnownProgram(program string) error {
-	base := filepath.Base(strings.TrimSpace(program))
-	switch base {
-	case "us-market":
-		return requireEnvForProgram(base, "US_MARKET_USER_AGENT")
-	case "feishu-send":
-		if strings.TrimSpace(os.Getenv("FEISHU_BOT_WEBHOOK_URL")) == "" {
-			return fmt.Errorf("preflight: %s requires FEISHU_BOT_WEBHOOK_URL", base)
-		}
-		return nil
-	default:
-		return nil
-	}
-}
-
-func requireEnvForProgram(program string, names ...string) error {
-	for _, name := range names {
-		if strings.TrimSpace(os.Getenv(name)) == "" {
-			return fmt.Errorf("preflight: %s requires %s", program, name)
-		}
 	}
 	return nil
 }

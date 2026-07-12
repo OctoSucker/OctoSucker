@@ -2,7 +2,6 @@ package toolrouting
 
 import (
 	"context"
-	"math"
 	"sort"
 	"strings"
 	"unicode"
@@ -12,13 +11,11 @@ import (
 
 type hopSignals struct {
 	successRate float64
-	costScore   float64
 	edgeTotal   int
 	intentMatch float64
-	exploration float64
 }
 
-func (g *Graph) hopSignalsRLocked(last, to Node, intent string, totalVisits int) hopSignals {
+func (g *Graph) hopSignalsRLocked(last, to Node, intent string) hopSignals {
 	var s hopSignals
 	s.successRate = 0.5
 	k := storage.EdgeKey{From: last.String(), To: to.String()}
@@ -28,15 +25,8 @@ func (g *Graph) hopSignalsRLocked(last, to Node, intent string, totalVisits int)
 		if s.edgeTotal > 0 {
 			s.successRate = e.Success / (e.Success + e.Failure)
 		}
-		if e.Cost > 0 {
-			s.costScore = -e.Cost * 0.01
-		}
-		if e.Latency > 0 {
-			s.costScore -= e.Latency * 0.001
-		}
 	}
 	s.intentMatch = g.intentMatchRateRLocked(intent, last.String(), to.String())
-	s.exploration = math.Sqrt(math.Log(float64(totalVisits+1)) / float64(s.edgeTotal+1))
 	return s
 }
 
@@ -73,12 +63,38 @@ func (g *Graph) intentMatchRateRLocked(intent, from, to string) float64 {
 
 func intentWordSet(t string) map[string]struct{} {
 	m := make(map[string]struct{})
-	f := func(r rune) bool { return unicode.IsSpace(r) || r == ',' || r == '.' }
-	for _, w := range strings.FieldsFunc(strings.ToLower(t), f) {
-		if len(w) >= 2 {
-			m[w] = struct{}{}
+	var latin []rune
+	var cjk []rune
+	flushLatin := func() {
+		if len(latin) >= 2 {
+			m[string(latin)] = struct{}{}
+		}
+		latin = latin[:0]
+	}
+	flushCJK := func() {
+		if len(cjk) == 1 {
+			m[string(cjk)] = struct{}{}
+		}
+		for i := 0; i+1 < len(cjk); i++ {
+			m[string(cjk[i:i+2])] = struct{}{}
+		}
+		cjk = cjk[:0]
+	}
+	for _, r := range []rune(strings.ToLower(t)) {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			flushLatin()
+			cjk = append(cjk, r)
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			flushCJK()
+			latin = append(latin, r)
+		default:
+			flushLatin()
+			flushCJK()
 		}
 	}
+	flushLatin()
+	flushCJK()
 	return m
 }
 
@@ -95,84 +111,36 @@ func wordOverlapRatio(a, b map[string]struct{}) float64 {
 	return float64(n) / float64(len(a))
 }
 
-// Confidence scores how promising the next hop looks from last given the user intent (0..1 heuristic).
-func (g *Graph) Confidence(ctx context.Context, intent string, last Node) float64 {
+// Recommend returns only well-supported historical tools. It is intentionally
+// conservative because the planner treats this output as advice, not routing.
+func (g *Graph) Recommend(ctx context.Context, intent, previousTool string, limit int) []string {
 	_ = ctx
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	next := g.catalogTools
-	if len(next) == 0 {
-		return 0
-	}
-	totalVisits := g.totalVisitsUnlocked()
-	best := 0.0
-	for _, toNPtr := range next {
-		if toNPtr == nil {
-			continue
-		}
-		toN := *toNPtr
-		s := g.hopSignalsRLocked(last, toN, intent, totalVisits)
-		const exploreWeight = 0.09
-		combined := s.successRate*0.55 + s.intentMatch*0.27 + s.costScore*0.09 + s.exploration*exploreWeight
-		if combined > best {
-			best = combined
-		}
-	}
-	return best
-}
-
-// Frontier ranks one-hop tool successors from last (nil last means synthetic entry). exclude removes one candidate when set.
-func (g *Graph) Frontier(ctx context.Context, intent string, last *Node, exclude *Node) []Node {
-	_ = ctx
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	lastNode := Node{}
-	if last != nil {
-		lastNode = *last
-	}
-	next := g.catalogTools
-	if len(next) == 0 {
+	if g == nil || limit <= 0 {
 		return nil
 	}
-	totalVisits := g.totalVisitsUnlocked()
-	isEntry := last == nil
-	intentW, successW, costW, exploreW := frontierWeights(isEntry)
-	type scored struct {
-		node  Node
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	from := Node{Tool: strings.TrimSpace(previousTool)}
+	type candidate struct {
+		tool  string
 		score float64
 	}
-	var list []scored
-	for _, toNPtr := range next {
-		if toNPtr == nil {
+	var candidates []candidate
+	for _, node := range g.catalogTools {
+		signals := g.hopSignalsRLocked(from, node, intent)
+		if signals.edgeTotal < 2 || signals.successRate < 0.67 || signals.intentMatch < 0.20 {
 			continue
 		}
-		toN := *toNPtr
-		if exclude != nil && toN.Tool == exclude.Tool {
-			continue
-		}
-		s := g.hopSignalsRLocked(lastNode, toN, intent, totalVisits)
-		combined := s.successRate*successW + s.intentMatch*intentW + s.costScore*costW + s.exploration*exploreW
-		list = append(list, scored{node: toN, score: combined})
+		score := signals.successRate*0.65 + signals.intentMatch*0.35
+		candidates = append(candidates, candidate{tool: node.Tool, score: score})
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].score > list[j].score })
-	out := make([]Node, len(list))
-	for i := range list {
-		out[i] = list[i].node
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.tool)
 	}
 	return out
-}
-
-func frontierWeights(isEntry bool) (intentW, successW, costW, exploreW float64) {
-	if isEntry {
-		return 0.40, 0.45, 0.08, 0.07
-	}
-	return 0.20, 0.62, 0.10, 0.08
-}
-
-func (g *Graph) totalVisitsUnlocked() int {
-	var n int
-	for _, e := range g.edges {
-		n += int(e.Success + e.Failure)
-	}
-	return n
 }

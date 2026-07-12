@@ -2,11 +2,12 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -55,6 +56,10 @@ func registryListToolsForProviderSchema() map[string]any {
 				"type":        "string",
 				"description": `Tool provider id (the "id" field from list_tool_providers).`,
 			},
+			"tool": map[string]any{
+				"type":        "string",
+				"description": "Optional exact tool name. Provide it when one schema is needed to avoid loading the provider's entire catalog.",
+			},
 		},
 		"required":             []string{"provider"},
 		"additionalProperties": false,
@@ -89,7 +94,7 @@ func (r *introspectionBackend) ToolList(ctx context.Context) ([]*mcp.Tool, error
 		},
 		{
 			Name:        ListToolsForProviderTool,
-			Description: "List tool descriptors exposed by one provider: name, description, and input_schema.",
+			Description: "List tool descriptors exposed by one provider, optionally filtered to one exact tool name.",
 			InputSchema: registryListToolsForProviderSchema(),
 		},
 	}, nil
@@ -128,15 +133,48 @@ func (r *introspectionBackend) Invoke(ctx context.Context, localTool string, arg
 		if err != nil {
 			return types.ToolResult{Err: err}, err
 		}
+		requestedTool, err := optionalStringArgument(arguments, "tool")
+		if err != nil {
+			return types.ToolResult{Err: err}, err
+		}
+		if requestedTool != "" {
+			filtered := tools[:0]
+			for _, descriptor := range tools {
+				if descriptor.Name == requestedTool {
+					filtered = append(filtered, descriptor)
+				}
+			}
+			tools = filtered
+			if len(tools) == 0 {
+				err := fmt.Errorf("tool registry: provider %q has no tool named %q", prov, requestedTool)
+				return types.ToolResult{Err: err}, err
+			}
+		}
 		return types.ToolResult{
 			Output: map[string]any{
 				"provider": prov,
+				"tool":     requestedTool,
 				"tools":    tools,
 			},
 		}, nil
 	default:
 		return types.ToolResult{Err: fmt.Errorf("registry: unknown tool %q", localTool)}, fmt.Errorf("registry: unknown tool %q", localTool)
 	}
+}
+
+func optionalStringArgument(arguments map[string]any, key string) (string, error) {
+	if arguments == nil {
+		return "", nil
+	}
+	value, ok := arguments[key]
+	if !ok || value == nil {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("tool_registry: argument %q must be a string", key)
+	}
+	return strings.TrimSpace(text), nil
 }
 
 // ProviderDescriptors returns every registered provider’s id and description, sorted by id.
@@ -157,42 +195,83 @@ type ProviderDescriptor struct {
 	Description string `json:"description"`
 }
 
-type ToolDescriptor struct {
-	Name         string         `json:"name"`
-	Description  string         `json:"description"`
-	Capabilities []string       `json:"capabilities,omitempty"`
-	Risk         string         `json:"risk,omitempty"`
-	InputSchema  map[string]any `json:"input_schema"`
-}
+type ToolDescriptor = types.ToolDescriptor
 
 // ToolDescriptorsForProvider returns sorted tool descriptors exposed by the named provider id.
 func (r *Registry) ToolDescriptorsForProvider(ctx context.Context, providerName string) ([]ToolDescriptor, error) {
+	_ = ctx
 	pname := strings.TrimSpace(providerName)
 	if pname == "" {
 		return nil, fmt.Errorf("tool registry: provider name is required")
 	}
-	p, ok := r.providerByName(pname)
+	_, ok := r.providerByName(pname)
 	if !ok {
 		return nil, fmt.Errorf("tool registry: unknown tool provider %q", pname)
 	}
-	tools, err := p.ToolList(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("tool registry: list tools for provider %q: %w", pname, err)
-	}
-	out := make([]ToolDescriptor, 0, len(tools))
-	for _, t := range tools {
+	out := make([]ToolDescriptor, 0)
+	for name, owner := range r.toolToProvider {
+		ownerID, _ := owner.Name()
+		if ownerID != pname {
+			continue
+		}
+		t := r.toolSpecs[name]
 		if t != nil && t.Name != "" {
-			schema, _ := t.InputSchema.(map[string]any)
-			policy := AssessToolCall(t.Name, nil)
+			schema, err := normalizeInputSchema(t.InputSchema)
+			if err != nil {
+				return nil, fmt.Errorf("tool registry: tool %q input schema: %w", t.Name, err)
+			}
+			policy := r.Assess(t.Name, nil)
 			out = append(out, ToolDescriptor{
+				Provider:     pname,
 				Name:         t.Name,
 				Description:  t.Description,
 				Capabilities: policy.Capabilities,
 				Risk:         policy.Risk,
+				OutputTrust:  policy.OutputTrust,
 				InputSchema:  schema,
 			})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func normalizeInputSchema(schema any) (map[string]any, error) {
+	if schema == nil {
+		return nil, fmt.Errorf("missing schema")
+	}
+	if value, ok := schema.(map[string]any); ok {
+		return value, nil
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+// ToolDescriptors returns the complete planner-facing catalog. Provider
+// discovery remains available as a user tool, but the planner never needs to
+// execute discovery merely to learn its own runtime capabilities.
+func (r *Registry) ToolDescriptors(ctx context.Context) ([]ToolDescriptor, error) {
+	_ = ctx
+	var out []ToolDescriptor
+	for _, provider := range r.providerIDs() {
+		descriptors, err := r.ToolDescriptorsForProvider(ctx, provider)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, descriptors...)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Provider == out[j].Provider {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Provider < out[j].Provider
+	})
 	return out, nil
 }

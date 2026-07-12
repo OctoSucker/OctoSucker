@@ -1,61 +1,69 @@
 # OctoSucker
 
-一个用 Go 实现的 AI agent runtime。
-
-当前版本的核心重点不是“知识图直接驱动 agent”，而是先把 agent 主链本身做稳定：
-
-- 明确的 runtime 状态机
-- 可学习的 tool routing graph
-- OpenAI 兼容模型做 step planning 和 trajectory evaluation
-- 内置工具 + MCP 工具统一注册到同一层工具目录
-- workspace 作用域的 SQLite 持久化
-
-知识图组件已经迁移为独立外部工具，但不作为 agent 主决策闭环的一部分。
-
-## 当前架构
-
-主链路是一个单回合、单任务的事件循环：
+OctoSucker is a serial AI agent runtime written in Go. Its core is a bounded
+action loop, not a collection of hard-coded workflows:
 
 ```text
-TurnRequested
-  -> Planner
-  -> StepScheduled
-  -> PlanExecutor
-  -> StepObserved
-  -> StepEvaluator
-  -> TrajectoryEvaluationRequested
-  -> TrajectoryEvaluator
-  -> nil | TurnRequested
+Planner -> Executor -> Evaluator -> Planner or Responder
 ```
 
-更完整的状态机说明见 [internal/runtime/DESIGN.md](/Users/zecrey/Desktop/OctoSucker/OctoSucker/internal/runtime/DESIGN.md)。
+The runtime combines builtin tools, MCP servers, and typed executable providers
+in one validated tool catalog. Directory-based Agent Skills add procedural
+instructions through explicit activation. Domain behavior belongs in those
+extensions; the core loop does not know about individual websites, markets, or
+messaging services.
 
-## 目录
+## Architecture
 
 | Path | Responsibility |
 | --- | --- |
-| `cmd/octosucker` | 进程入口，只负责 flag、config、runtime、gateway 装配 |
-| `config` | workspace config 加载和路径解析 |
-| `internal/runtime` | agent runtime 状态机 |
-| `internal/runtime/toolrouting` | agent 使用的 learned tool routing graph |
-| `internal/runtime/planning` | route decision、step selection、argument generation |
-| `internal/runtime/execution` | step execution |
-| `internal/runtime/judge` | step / trajectory evaluation |
-| `internal/runtime/model` | task、plan、event、payload、tool result |
-| `internal/runtime/taskstore` | 进程内 task state |
-| `internal/tools` | builtin tools、MCP sessions、registry |
-| `internal/storage` | SQLite schema 和 persistence helpers |
-| `internal/gateway` | ingress 装配 |
-| `internal/ingress` | stdin、Telegram、admin HTTP |
-| `pkg/llmclient` | OpenAI 兼容客户端封装 |
-| `pkg/workspacelog` | workspace 日志文件工具 |
-| `workspace` | 本地示例 workspace 资源：`config.example.json`、sandbox profile、skills |
+| `cmd/octosucker` | Process flags, config, runtime, and gateway wiring |
+| `config` | Workspace configuration and path resolution |
+| `internal/runtime/agentloop` | Generic serial turn controller and limits |
+| `internal/runtime/model` | Append-only turn, action, observation, and assessment state |
+| `internal/runtime/contextmanager` | Role-specific token budgets, selection, and trajectory compaction |
+| `internal/runtime/planning` | One structured action-or-respond decision |
+| `internal/runtime/execution` | Tool invocation and result normalization |
+| `internal/runtime/evaluation` | Goal progress and semantic action evaluation |
+| `internal/runtime/responding` | Final user-facing synthesis |
+| `internal/runtime/conversation` | Bounded in-memory context by conversation id |
+| `internal/runtime/toolrouting` | Conservative learned routing recommendations |
+| `internal/skills` | Agent Skill discovery, validation, and resource access |
+| `internal/toolcontract` | Tool DTOs and full JSON Schema validation |
+| `internal/tools` | Registry, builtin providers, MCP sessions, and typed executable adapters |
+| `internal/tools/opencli` | OpenCLI help introspection, generated schemas, and deterministic argv compilation |
+| `internal/storage` | Workspace SQLite persistence |
+| `internal/gateway` | Ingress assembly |
+| `internal/ingress` | stdin, Telegram, and admin HTTP adapters |
 
-## Workspace 约定
+The detailed contracts are documented in
+[`internal/runtime/DESIGN.md`](internal/runtime/DESIGN.md).
 
-`-workspace` 指向一个已存在的 agent home。
+## Runtime Properties
 
-这个目录通常包含：
+- One action is planned and executed at a time.
+- The planner receives exact tool ids, descriptions, risk metadata, and schemas.
+- Tool arguments are validated against full JSON Schema before invocation and
+  again at the registry boundary.
+- Structured model decisions use JSON response mode with validation retries.
+- Planner, evaluator, and responder use independently configured models.
+- Prompt context is budgeted by role; old steps are compacted as structured summaries rather than cut mid-output.
+- The execution trajectory is append-only; failed attempts remain visible.
+- Exact failed actions cannot be repeated in the same turn.
+- Tool success and user-goal success are evaluated separately.
+- Goal progress and routing-learning value are independent; useful prerequisite
+  actions can teach routing without prematurely completing the turn.
+- Final answers synthesize all useful observations.
+- Learned routing is advisory and never bypasses the planner.
+- Conversation context is separated by ingress-supplied conversation id.
+- Activated Skill instructions persist in the conversation independently of
+  bounded execution observations.
+- Observation provenance prevents untrusted tool output from becoming agent
+  instructions or leaking unrelated secrets.
+
+## Workspace
+
+`-workspace` points to an existing agent home containing resources such as:
 
 - `config.json`
 - `skills/`
@@ -63,76 +71,74 @@ TurnRequested
 - `data/`
 - `logs/`
 
-运行时会把它当成 agent 自己的工作区根目录。  
-`exec.workspace_dirs` 只表示命令执行允许访问的目录，不再承担 agent root 语义。
+Each Skill is a directory with a required `SKILL.md` and optional supporting
+resources:
 
-## 快速开始
-
-1. 准备一个 workspace 目录。
-2. 复制示例配置：
-
-```bash
-cp workspace/config.example.json /your/workspace/config.json
+```text
+skills/opencli/
+|-- SKILL.md
+`-- references/
+    `-- authentication.md
 ```
 
-3. 修改 `config.json`，至少填这些字段：
+Only Skill name and description enter the default catalog. The complete
+`SKILL.md` is injected after `activate_skill`; supporting resources are read on
+demand with `read_skill_resource`.
 
-- `openai.api_key`
-- `openai.base_url`
-- `openai.model`
-- `openai.embedding_model`
+Secrets remain in local configuration or environment variables. Do not commit
+`workspace/config.json`, SQLite data, or logs.
 
-4. 构建并运行：
+## Run
 
 ```bash
 go build -o octosucker ./cmd/octosucker
-./octosucker -workspace /your/workspace
+./octosucker -workspace /path/to/workspace
 ```
 
-也可以直接：
+One-shot mode:
 
 ```bash
-go run ./cmd/octosucker -workspace /your/workspace
+./octosucker -workspace /path/to/workspace -message "列出当前可用技能"
 ```
 
-## 当前设计取向
+The admin HTTP endpoint accepts an optional conversation id:
 
-当前代码刻意偏向：
+```json
+{
+  "conversation_id": "browser-main",
+  "message": "继续刚才的分析"
+}
+```
 
-- 单回合编排容易读
-- `Task` 聚合根集中持有回合状态
-- `Plan` 集中持有步骤序列状态
-- 用渐进收口替代一次性大拆分
+If omitted, the local admin conversation id is `admin`.
 
-当前代码不追求：
+## Extension Model
 
-- 高度泛化的 workflow engine
-- 多任务并发图执行
-- 过度抽象的 actor / bus 框架
+Use one of these boundaries for new capabilities:
 
-这是有意选择，不是未完成状态。
+1. MCP provider for a structured service.
+2. A typed provider that deterministically adapts an executable into
+   schema-validated tools.
+3. A directory-based Agent Skill for procedural knowledge and workflow rules.
 
-## 清理约定
+Do not use a Skill document as an executable protocol. Stable integrations must
+not require the model to reconstruct a binary name, flags, or argv from prose.
+Keep `run_command` for genuinely ad hoc commands rather than as the interface to
+a maintained capability.
 
-这些文件不应进入仓库：
+The optional OpenCLI provider demonstrates the typed executable boundary. At
+startup it reads `opencli <site> --help -f yaml`, exposes only the configured
+allowlist, and always compiles structured arguments to JSON-producing commands.
+Configure it under `opencli.command`, `opencli.command_timeout_sec`, and
+`opencli.commands` in `config.json`.
 
-- 本地二进制
-- `.gocache/`
-- `workspace/data/`
-- `workspace/logs/`
-- 带真实密钥的 `workspace/config.json`
+Do not add domain intent matching or domain-specific state transitions to the
+runtime loop. Stable business workflows should live in the external tool or be
+described by a Skill that composes already-structured tools.
 
-仓库里只保留 `workspace/config.example.json` 作为示例。
+## Validation
 
-## Knowledge Graph Tool
-
-`knowledge_graph` 已经从 agent 逻辑里迁移成外部独立仓库工具。
-
-它提供两种接入方式：
-
-- CLI: 外部 `kggraph` 二进制
-- MCP stdio server: 外部 `kggraph serve-mcp`
-
-当前仓库不再为知识图插件保留专用 builtin wrapper。推荐做法是安装外部 `kggraph`，再通过 skill 把它作为 CLI 插件接入；另一种做法是直接把 `kggraph serve-mcp` 作为 MCP endpoint 接入。
-
-`workspace/skills/` 不再默认包含 KGgraph CLI plugin。需要 KGgraph 时，在 workspace 自己的 `skills/` 中添加 CLI plugin 配置，或把 `kggraph serve-mcp` 暴露为 MCP endpoint。
+```bash
+go test ./...
+go vet ./...
+```

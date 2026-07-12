@@ -1,217 +1,201 @@
 # Runtime Design
 
-## Scope
+## Purpose
 
-`internal/runtime` is the workspace-scoped agent state machine.
+`internal/runtime` is a serial, tool-using agent loop. It is not a workflow
+engine and contains no domain-specific workflows.
 
-It owns one turn loop:
-
-1. accept a turn request
-2. plan one next step
-3. execute that step
-4. evaluate the observation
-5. decide whether to finish, continue, or replan
-
-This package does not own ingress protocols such as stdin, Telegram, or HTTP.
-
-## Main Objects
-
-### Runtime
-
-`Runtime` is the top-level workspace process object.
-
-It owns:
-
-- workspace SQLite handle
-- tool registry
-- dispatcher
-- single-flight turn lock
-
-It exposes a narrow surface:
-
-- `RunTurn(ctx, text)`
-- `WorkspaceDB()`
-- `Close()`
-
-### Dispatcher
-
-`Dispatcher` is the event loop coordinator.
-
-It owns the runtime flow modules:
-
-- `Planner`
-- `PlanExecutor`
-- `Evaluator`
-
-It does not decide business policy itself. It only routes the current event to the correct module and feeds the returned next event back into the loop.
-
-## Event Model
-
-The runtime loop is modeled as explicit state-transition requests.
-
-### Events
-
-- `EvTurnRequested`
-  - a new user turn should be planned
-- `EvStepScheduled`
-  - a step has been added to the current plan and should now be executed
-- `EvStepObserved`
-  - one tool invocation completed and its observation should now be evaluated
-- `EvTrajectoryEvaluationRequested`
-  - the current trajectory should be evaluated for complete / continue / abort / replan
-
-### Normal Flow
+One turn follows this control flow:
 
 ```text
-EvTurnRequested
-  -> Planner
-  -> EvStepScheduled
-
-EvStepScheduled
-  -> PlanExecutor
-  -> EvStepObserved
-
-EvStepObserved
-  -> StepEvaluator
-  -> EvTrajectoryEvaluationRequested
-
-EvTrajectoryEvaluationRequested
-  -> TrajectoryEvaluator
-  -> nil | EvTurnRequested
+conversation context + user goal
+              |
+              v
+          Planner
+       /             \
+   respond          one Action
+      |                 |
+      |             Executor
+      |                 |
+      |            Observation
+      |                 |
+      |             Evaluator
+      |        /          |          \
+      |    continue    complete     blocked
+      |        |          |          |
+      |        +----------+----------+
+      |                   |
+      +--------------> Responder
+                          |
+                    user-facing answer
 ```
 
-`nil` means the turn is finished.
+The planner is called again after `continue`. This is the replan operation;
+there is no separate replan event and no trajectory truncation.
 
-## Runtime Modules
+## Module Boundaries
 
-### Planner
+### `runtime`
 
-`planning` is responsible only for choosing the next step.
+The composition root. It builds the registry, planner, executor, evaluator,
+responder, optional routing learner, and conversation store. It owns the
+single-flight turn lock and workspace resources.
 
-It has three internal stages:
+### `agentloop`
 
-1. route decision
-   - graph route or LLM route
-2. step selection
-   - choose one next tool and goal
-3. argument generation
-   - generate schema-valid arguments for the selected tool
+The control policy for one turn. It only depends on narrow interfaces:
 
-Planner does not execute tools and does not judge outcomes.
+- `Planner`
+- `Executor`
+- `Evaluator`
+- `Responder`
+- optional `Learner`
 
-### PlanExecutor
+It enforces action and consecutive-failure limits. It does not know any tool,
+provider, CLI, skill, or business domain by name.
 
-`execution` is responsible only for running the next runnable step.
+### `model`
 
-It:
+The turn aggregate and its value types:
 
-- finds the next runnable pending step
-- marks it running
-- renders step arguments
-- invokes the selected tool
-- emits `EvStepObserved`
+- `Turn`
+- `Decision`
+- `Action`
+- `Observation`
+- `Assessment`
+- `Step`
 
-It does not decide whether the trajectory is good or bad.
+`Turn.Steps` is an append-only execution trajectory. A failed or irrelevant
+action remains visible to later decisions and final synthesis. Exact failed
+actions are identified by a structured tool-and-arguments fingerprint.
 
-### Evaluator
+`Turn.ContextArtifacts` is separate from the trajectory. Trusted tools may
+produce durable context, such as an activated Agent Skill. These artifacts are
+bounded, deduplicated, retained in process-local conversation state, and
+injected into planning, evaluation, and response prompts without passing
+through observation truncation.
 
-`judge` was renamed conceptually to `evaluator`.
+Every observation also carries `output_trust`. Workspace instructions and
+runtime metadata may guide the agent; ordinary CLI, MCP, browser, and external
+content is treated as untrusted data and cannot supply new instructions.
 
-It has two layers:
+### `contextmanager`
 
-- `StepEvaluator`
-  - evaluates one observed step
-  - records route transition success/failure
-  - either requests replan or requests trajectory evaluation
-- `TrajectoryEvaluator`
-  - evaluates the whole trajectory
-  - internally split into:
-    - `TrajectoryEvaluatorJudge`: gets the LLM verdict
-    - `TrajectoryDecisionApplier`: applies the verdict to task state
+Builds role-specific prompt snapshots for planning, evaluation, and response.
+It owns token estimation, section budgets, conversation selection, active
+instruction selection, tool-catalog reduction, and trajectory compaction.
 
-Evaluator does not choose tools.
+The latest steps are retained as complete structured units. When a trajectory
+exceeds its budget, older steps become explicit summaries instead of being
+silently cut in the middle of an observation. Context usage and omissions are
+recorded in the turn trace. The context manager does not call an LLM or make
+control-flow decisions.
 
-## Task And Plan Boundaries
+### `planning`
 
-### Task
+Makes one structured decision:
 
-`Task` is the aggregate root for one user turn.
+- `act`, including an exact tool id and complete arguments
+- `respond`, when tools are unnecessary, evidence is sufficient, clarification
+  is required, or no legitimate action remains
 
-It intentionally keeps the most important turn-local state in one place:
+Responses are classified as `answer`, `clarify`, or `blocked`, so a request for
+missing information and an environmental failure are not recorded as successful
+task completion.
 
-- `UserInput`
-- `Plan`
-- `Reply`
-- `TrajectorySummary`
-- `ReplanCount`
+The planner receives the complete tool catalog with JSON schemas. Selection and
+argument generation happen in one model call, followed by full JSON Schema
+validation and one corrective retry. Historical routing recommendations are
+weak hints only and can never bypass the planner.
 
-This is a pragmatic choice. The code favors easy orchestration over aggressively splitting state into many structs.
+The registry snapshots tool descriptors and schemas during startup. Planning,
+validation, and response grounding read this local snapshot; MCP network calls
+occur only during explicit tool invocation.
 
-`Task` should own high-level turn mutations such as:
+### `execution`
 
-- set user input
-- append step
-- mark step done
-- increment replan count
-- mark completed / aborted / continuing / replanning
-- truncate plan for replanning
+Invokes one validated action and normalizes the result. It records policy
+metadata but does not retry, evaluate progress, or produce user output.
 
-### Plan
+### `evaluation`
 
-`Plan` owns the ordered step sequence.
+Judges the latest successful observation against the whole user goal:
 
-It should own step-sequence operations such as:
+- `continue`
+- `complete`
+- `blocked`
 
-- create empty plan
-- get last step / last node
-- get last done step output
-- count steps
-- check whether plan has steps
-- truncate from a step
-- mark step status
-- find runnable step
+It separately labels the latest action as `helpful`, `wrong_route`, or
+`no_signal` for routing learning and records a bounded reason code. Progress and
+routing value are independent: a necessary prerequisite can be useful learning
+while the turn still needs to continue. Tool execution success alone never
+implies goal success.
 
-Rule of thumb:
+Technical tool failures do not require an LLM judgment. `agentloop` classifies
+them generically and returns recoverable failures to the planner.
 
-- turn-level mutations belong on `Task`
-- step-sequence mutations belong on `Plan`
+A successful typed tool result is the authoritative observation of that tool's
+effect. The evaluator does not demand recursive read-back verification unless
+the result itself is ambiguous, partial, pending, or independent verification
+was explicitly requested.
 
-## State Mutation Rules
+### `responding`
 
-To keep orchestration simple without losing control, runtime code should prefer methods over direct field mutation.
+Owns all user-facing synthesis. It sees conversation context and the bounded
+full trajectory, so multi-step answers never degrade to the last tool output.
 
-Good:
+### `conversation`
 
-- `task.SetUserInput(...)`
-- `task.MarkCompleted(...)`
-- `task.MarkReplanning(...)`
-- `task.MarkStepDone(...)`
-- `plan.LastStep()`
-- `plan.TruncateFromStep(...)`
+Keeps bounded process-local dialogue history by an ingress-supplied conversation
+id. It also retains trusted active context artifacts for the conversation.
+HTTP, stdin, and each Telegram chat use separate ids. Persistence is outside the
+current scope.
 
-Avoid when possible:
+### `skills`
 
-- direct writes to `task.Reply`
-- direct writes to `task.TrajectorySummary`
-- direct writes to `task.ReplanCount`
-- direct slicing of `plan.Steps`
-- direct indexing into `plan.Steps[len-1]`
+Owns directory-based Agent Skill discovery and validation. A Skill consists of
+`<name>/SKILL.md` plus optional supporting files. The catalog enforces exact
+names, required descriptions, bounded complete instructions, safe relative
+resource access, UTF-8 input, and non-symlink files.
 
-## Design Intent
+The tools layer exposes `activate_skill` and `read_skill_resource`; Skill files
+never register executable providers or define process argv.
 
-This runtime is not trying to be a general workflow engine.
+### `learning` and `toolrouting`
 
-The current design optimizes for:
+Semantic action outcomes are stored in SQLite. Recommendations require repeated,
+similar successful examples. They are advisory prompt context, not an alternate
+execution path. Learning persistence failures never fail the user turn.
 
-- readable control flow
-- explicit state transitions
-- low indirection during agent orchestration
-- incremental refactoring safety
+### `toolcontract`
 
-The design does not optimize for:
+Shared tool result, policy, descriptor, and JSON Schema validation types. Tool
+providers depend on this package rather than importing the agent runtime.
 
-- maximal abstraction purity
-- highly generic actor frameworks
-- concurrency-heavy execution graphs
+## Dependency Direction
 
-That tradeoff is intentional.
+```text
+ingress -> gateway -> runtime composition
+                         |
+                         v
+        planning / execution / evaluation / responding
+                         |
+                         v
+                  model + toolcontract
+
+tools/providers -----------------------> toolcontract
+```
+
+Tool providers must not import runtime state. Runtime modules must not inspect
+specific business programs or tool output shapes.
+
+## Extension Rules
+
+- Add business capabilities as MCP tools or typed executable providers.
+- Use Skills for procedural guidance and composition, never as a substitute for
+  a structured execution contract.
+- Put stable multi-step business orchestration in the external tool or a
+  declarative skill, not in `agentloop`, `planning`, or `evaluation`.
+- Add generic safety and lifecycle behavior to the loop only when it applies to
+  every tool.
+- Keep execution serial until parallel action semantics are explicitly needed.

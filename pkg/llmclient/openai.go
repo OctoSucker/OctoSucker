@@ -16,6 +16,7 @@ type OpenAI struct {
 	Client         openai.Client
 	Model          string
 	EmbeddingModel string
+	EnableThinking *bool
 }
 
 const (
@@ -23,7 +24,7 @@ const (
 	defaultEmbedTimeout    = 20 * time.Second
 )
 
-func NewOpenAI(baseURL, apiKey, model, embeddingModel string) *OpenAI {
+func NewOpenAI(baseURL, apiKey, model, embeddingModel string, enableThinking *bool) *OpenAI {
 	var opts []option.RequestOption
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
@@ -35,10 +36,15 @@ func NewOpenAI(baseURL, apiKey, model, embeddingModel string) *OpenAI {
 		Client:         openai.NewClient(opts...),
 		Model:          model,
 		EmbeddingModel: embeddingModel,
+		EnableThinking: enableThinking,
 	}
 }
 
 func (c *OpenAI) Complete(ctx context.Context, systemMsg string, userMsg string) (string, error) {
+	return c.complete(ctx, systemMsg, userMsg, false)
+}
+
+func (c *OpenAI) complete(ctx context.Context, systemMsg, userMsg string, jsonObject bool) (string, error) {
 	if c.Model == "" {
 		return "", fmt.Errorf("llmclient.OpenAI: model required")
 	}
@@ -46,7 +52,7 @@ func (c *OpenAI) Complete(ctx context.Context, systemMsg string, userMsg string)
 	defer cancel()
 
 	m := shared.ChatModel(c.Model)
-	res, err := c.Client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+	params := openai.ChatCompletionNewParams{
 		Model: m,
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			{OfSystem: &openai.ChatCompletionSystemMessageParam{
@@ -60,7 +66,16 @@ func (c *OpenAI) Complete(ctx context.Context, systemMsg string, userMsg string)
 				},
 			}},
 		},
-	})
+	}
+	if jsonObject {
+		format := shared.NewResponseFormatJSONObjectParam()
+		params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{OfJSONObject: &format}
+	}
+	var requestOptions []option.RequestOption
+	if c.EnableThinking != nil {
+		requestOptions = append(requestOptions, option.WithJSONSet("enable_thinking", *c.EnableThinking))
+	}
+	res, err := c.Client.Chat.Completions.New(ctx, params, requestOptions...)
 	if err != nil {
 		return "", err
 	}
@@ -74,7 +89,7 @@ func (c *OpenAI) CompleteJSON(ctx context.Context, system string, user string, o
 	if out == nil {
 		return fmt.Errorf("llmclient.OpenAI: out is nil")
 	}
-	raw, err := c.Complete(ctx, system, user)
+	raw, err := c.complete(ctx, system, user, true)
 	if err != nil {
 		return err
 	}

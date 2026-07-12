@@ -3,19 +3,20 @@ package planning
 import (
 	"context"
 
-	"github.com/OctoSucker/octosucker/internal/runtime/toolrouting"
-	tools "github.com/OctoSucker/octosucker/internal/tools"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/OctoSucker/octosucker/internal/toolcontract"
 )
 
+type JSONCompleter interface {
+	CompleteJSON(ctx context.Context, system, user string, out any) error
+}
+
 type ToolCatalog interface {
-	Tool(name string) (*mcp.Tool, error)
-	AllToolIDs() []string
-	ProviderDescriptors() []tools.ProviderDescriptor
+	ToolDescriptors(ctx context.Context) ([]toolcontract.ToolDescriptor, error)
 	SkillDescriptors() []map[string]any
 }
 
-type RouteGraph interface {
-	Confidence(ctx context.Context, intent string, last toolrouting.Node) float64
-	Frontier(ctx context.Context, intent string, last *toolrouting.Node, exclude *toolrouting.Node) []toolrouting.Node
+// ToolAdvisor supplies conservative historical hints. A recommendation never
+// bypasses the planner or argument validation.
+type ToolAdvisor interface {
+	Recommend(ctx context.Context, goal, previousTool string, limit int) []string
 }

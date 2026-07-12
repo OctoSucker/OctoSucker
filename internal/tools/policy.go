@@ -3,12 +3,15 @@ package tools
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/OctoSucker/octosucker/internal/toolcontract"
 )
 
 type PolicyAssessment struct {
 	Capabilities []string `json:"capabilities"`
 	Risk         string   `json:"risk"`
 	Summary      string   `json:"summary"`
+	OutputTrust  string   `json:"output_trust"`
 }
 
 func AssessToolCall(tool string, arguments map[string]any) PolicyAssessment {
@@ -16,23 +19,33 @@ func AssessToolCall(tool string, arguments map[string]any) PolicyAssessment {
 	switch tool {
 	case "run_command":
 		return assessRunCommand(arguments)
-	case "analyze_us_market_intel":
+	case "activate_skill", "read_skill_resource":
 		return PolicyAssessment{
-			Capabilities: []string{"llm", "analysis"},
-			Risk:         "medium",
-			Summary:      "LLM analysis over supplied market data",
+			Capabilities: []string{"workspace_read", "instructions"},
+			Risk:         "low",
+			Summary:      "reads workspace-owned agent instructions",
+			OutputTrust:  toolcontract.TrustWorkspaceInstruction,
+		}
+	case "list_skills", "get_skills_root_dir", "list_tool_providers", "list_tools_for_provider", "list_cronjobs":
+		return PolicyAssessment{
+			Capabilities: []string{"runtime_metadata"},
+			Risk:         "low",
+			Summary:      "reads runtime-owned metadata",
+			OutputTrust:  toolcontract.TrustRuntimeMetadata,
 		}
 	case "send_telegram_message":
 		return PolicyAssessment{
 			Capabilities: []string{"external_send"},
 			Risk:         "high",
 			Summary:      "sends content to Telegram",
+			OutputTrust:  toolcontract.TrustRuntimeMetadata,
 		}
 	default:
 		return PolicyAssessment{
 			Capabilities: []string{"tool"},
 			Risk:         "low",
 			Summary:      "structured tool call",
+			OutputTrust:  toolcontract.TrustUntrustedData,
 		}
 	}
 }
@@ -40,18 +53,10 @@ func AssessToolCall(tool string, arguments map[string]any) PolicyAssessment {
 func assessRunCommand(arguments map[string]any) PolicyAssessment {
 	program, _ := arguments["program"].(string)
 	base := filepath.Base(strings.TrimSpace(program))
-	caps := []string{"shell"}
-	risk := "medium"
-	summary := "runs a local command"
+	caps := []string{"process", "filesystem_possible", "network_possible"}
+	risk := "high"
+	summary := "runs an arbitrary local command"
 	switch base {
-	case "feishu-send":
-		caps = append(caps, "external_send")
-		risk = "high"
-		summary = "sends content to Feishu"
-	case "us-market":
-		caps = append(caps, "network_read", "market_data")
-		risk = "medium"
-		summary = "reads public market data"
 	case "git":
 		caps = append(caps, "git")
 		if commandArgsContain(arguments, "push") {
@@ -70,17 +75,12 @@ func assessRunCommand(arguments map[string]any) PolicyAssessment {
 	}
 	if isShell(base) {
 		caps = append(caps, "shell_script")
-		if shellCommandMentions(arguments, "feishu-send") {
-			caps = append(caps, "external_send")
-			risk = "high"
-			summary = "runs a shell script that can send content externally"
-		}
 		if shellCommandMentions(arguments, "curl") || shellCommandMentions(arguments, "wget") {
 			caps = append(caps, "network")
 			risk = "high"
 		}
 	}
-	return PolicyAssessment{Capabilities: dedupe(caps), Risk: risk, Summary: summary}
+	return PolicyAssessment{Capabilities: dedupe(caps), Risk: risk, Summary: summary, OutputTrust: toolcontract.TrustUntrustedData}
 }
 
 func commandArgsContain(arguments map[string]any, needle string) bool {

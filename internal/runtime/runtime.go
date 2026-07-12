@@ -1,6 +1,5 @@
-// Package runtime is the workspace-scoped agent process core: SQLite, dispatcher,
-// single-flight user turns, and exposure of read-only KG access for the admin HTTP layer.
-// Ingress adapters live under internal/ingress, wired by internal/gateway.
+// Package runtime composes the workspace-scoped agent loop and exposes a small
+// ingress-facing API.
 package runtime
 
 import (
@@ -12,22 +11,35 @@ import (
 	"sync"
 
 	"github.com/OctoSucker/octosucker/config"
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	"github.com/OctoSucker/octosucker/internal/interaction"
+	"github.com/OctoSucker/octosucker/internal/runtime/agentloop"
+	"github.com/OctoSucker/octosucker/internal/runtime/contextmanager"
+	"github.com/OctoSucker/octosucker/internal/runtime/conversation"
+	"github.com/OctoSucker/octosucker/internal/runtime/evaluation"
+	"github.com/OctoSucker/octosucker/internal/runtime/execution"
+	"github.com/OctoSucker/octosucker/internal/runtime/learning"
+	"github.com/OctoSucker/octosucker/internal/runtime/model"
+	"github.com/OctoSucker/octosucker/internal/runtime/planning"
+	"github.com/OctoSucker/octosucker/internal/runtime/projectcontext"
+	"github.com/OctoSucker/octosucker/internal/runtime/responding"
+	"github.com/OctoSucker/octosucker/internal/runtime/toolrouting"
 	"github.com/OctoSucker/octosucker/internal/storage"
+	"github.com/OctoSucker/octosucker/internal/tools"
+	"github.com/OctoSucker/octosucker/pkg/llmclient"
 	"github.com/google/uuid"
 )
 
-// MsgBusy is returned when a second turn starts while another holds the single-flight lock.
 const MsgBusy = "当前 agent 正忙，请稍后再试。"
 
-// Runtime is one loaded workspace: dispatcher plus persistent store.
 type Runtime struct {
-	Dispatcher *Dispatcher
-	data       *storage.DB
-	turnMu     sync.Mutex
+	loop          *agentloop.Loop
+	tools         *tools.Registry
+	conversations *conversation.Store
+	interactions  *interaction.Planner
+	data          *storage.DB
+	turnMu        sync.Mutex
 }
 
-// NewRuntime loads workspace SQLite and builds the dispatcher from cfg.
 func NewRuntime(ctx context.Context, workspaceRoot string, cfg *config.Workspace) (*Runtime, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("runtime: workspace config required")
@@ -36,55 +48,137 @@ func NewRuntime(ctx context.Context, workspaceRoot string, cfg *config.Workspace
 	if err != nil {
 		return nil, fmt.Errorf("runtime: sqlite: %w", err)
 	}
+	closeData := func(cause error) error {
+		if closeErr := data.Close(); closeErr != nil {
+			return errors.Join(cause, closeErr)
+		}
+		return cause
+	}
 
-	d, err := NewDispatcher(ctx, DispatcherDeps{
+	projectCtx := projectcontext.Load(workspaceRoot)
+	plannerLLM := newRoleLLM(cfg.OpenAI, cfg.OpenAI.Models.Planner)
+	evaluatorLLM := newRoleLLM(cfg.OpenAI, cfg.OpenAI.Models.Evaluator)
+	responderLLM := newRoleLLM(cfg.OpenAI, cfg.OpenAI.Models.Responder)
+	contexts := contextmanager.New(contextmanager.Limits{
+		PlannerTokens:   cfg.Context.PlannerInputTokens,
+		EvaluatorTokens: cfg.Context.EvaluatorInputTokens,
+		ResponderTokens: cfg.Context.ResponderInputTokens,
+	})
+	registry, err := tools.NewRegistry(ctx, tools.RegistryDeps{
 		WorkspaceRoot: workspaceRoot,
 		MCPEndpoints:  cfg.MCPEndpoint,
-		OpenAI:        cfg.OpenAI,
 		Exec:          cfg.Exec,
 		Telegram:      cfg.Telegram,
+		OpenCLI:       cfg.OpenCLI,
 		SkillsDir:     cfg.SkillsDir,
-		Data:          data,
+		EmbedLLM:      plannerLLM,
 	})
 	if err != nil {
-		if cerr := data.Close(); cerr != nil {
-			err = errors.Join(err, fmt.Errorf("close data db: %w", cerr))
+		return nil, closeData(fmt.Errorf("runtime: tool registry: %w", err))
+	}
+	closeAll := func(cause error) error {
+		if closeErr := registry.Close(); closeErr != nil {
+			cause = errors.Join(cause, closeErr)
 		}
-		return nil, fmt.Errorf("runtime: dispatcher: %w", err)
+		return closeData(cause)
+	}
+
+	routeGraph, err := toolrouting.New(data, registry.AllToolIDs())
+	if err != nil {
+		return nil, closeAll(fmt.Errorf("runtime: routing advisor: %w", err))
+	}
+	planner, err := planning.New(registry, plannerLLM, routeGraph, contexts, projectCtx)
+	if err != nil {
+		return nil, closeAll(err)
+	}
+	executor, err := execution.New(registry)
+	if err != nil {
+		return nil, closeAll(err)
+	}
+	evaluator, err := evaluation.New(evaluatorLLM, contexts, projectCtx)
+	if err != nil {
+		return nil, closeAll(err)
+	}
+	responder, err := responding.New(responderLLM, registry, contexts, projectCtx)
+	if err != nil {
+		return nil, closeAll(err)
+	}
+	interactionPlanner, err := interaction.NewPlanner(responderLLM)
+	if err != nil {
+		return nil, closeAll(err)
+	}
+	loop, err := agentloop.New(planner, executor, evaluator, responder, learning.NewRoutingRecorder(routeGraph))
+	if err != nil {
+		return nil, closeAll(err)
 	}
 
 	return &Runtime{
-		Dispatcher: d,
-		data:       data,
+		loop:          loop,
+		tools:         registry,
+		conversations: conversation.NewStore(),
+		interactions:  interactionPlanner,
+		data:          data,
 	}, nil
 }
 
-// WorkspaceDB returns the workspace store for admin KG APIs, or nil after Close.
+func newRoleLLM(common config.OpenAI, role config.Model) *llmclient.OpenAI {
+	return llmclient.NewOpenAI(common.BaseURL, common.APIKey, role.Name, common.EmbeddingModel, role.EnableThinking)
+}
+
 func (r *Runtime) WorkspaceDB() storage.KnowledgeGraphReader {
 	return r.data
 }
 
-// RunTurn handles one user message from any ingress (new task id per call).
-func (r *Runtime) RunTurn(ctx context.Context, text string) ([]string, error) {
+func (r *Runtime) PlanInteraction(ctx context.Context, messages []string) (*interaction.Interaction, error) {
+	if r == nil || r.interactions == nil {
+		return nil, nil
+	}
+	result, err := r.interactions.PlanResult(ctx, messages)
+	if err != nil {
+		log.Printf("interaction_planner: error=%v", err)
+		return nil, err
+	}
+	if result == nil {
+		log.Printf("interaction_planner: source=nil")
+		return nil, nil
+	}
+	if result.Interaction == nil {
+		log.Printf("interaction_planner: source=%s reason=%q interaction=nil", result.Source, result.Reason)
+		return nil, nil
+	}
+	log.Printf("interaction_planner: source=%s id=%s type=%s fields=%d reason=%q", result.Source, result.Interaction.ID, result.Interaction.Type, len(result.Interaction.Fields), result.Reason)
+	return result.Interaction, nil
+}
+
+// RunTurn executes one user request in the named in-memory conversation.
+func (r *Runtime) RunTurn(ctx context.Context, conversationID, text string) ([]string, error) {
 	if !r.turnMu.TryLock() {
 		return []string{MsgBusy}, nil
 	}
 	defer r.turnMu.Unlock()
 
-	taskID := uuid.New().String()
-	ev := types.Event{Type: types.EvTurnRequested, Payload: types.TurnRequest{
-		TaskID: taskID,
-		Text:   text,
-	}}
-	if err := r.Dispatcher.Run(ctx, ev); err != nil {
-		log.Printf("runtime.RunTurn: dispatcher error task=%s err=%v", taskID, err)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, fmt.Errorf("runtime: empty user input")
+	}
+	turn := model.NewTurn(
+		uuid.NewString(),
+		conversationID,
+		text,
+		r.conversations.Context(conversationID),
+		r.conversations.ContextArtifacts(conversationID),
+	)
+	if err := r.loop.Run(ctx, turn); err != nil {
+		log.Printf("runtime: turn=%s conversation=%s error=%v", turn.ID, conversationID, err)
 		return []string{friendlyRunError(err)}, nil
 	}
-	task, ok := r.Dispatcher.Planner.Tasks.Get(taskID)
-	if !ok || task == nil {
-		return nil, fmt.Errorf("task missing")
+	r.conversations.RememberContextArtifacts(conversationID, turn.ContextArtifactsSnapshot())
+	r.conversations.AppendExchange(conversationID, text, turn.Answer)
+	log.Printf("runtime: turn=%s conversation=%s status=%s actions=%d reason=%q", turn.ID, conversationID, turn.Status, len(turn.Steps), turn.TerminalReason)
+	if trace := turn.TraceSummary(); trace != "" {
+		log.Printf("run_trace: turn=%s\n%s", turn.ID, trace)
 	}
-	return task.UserFacingTurnMessages()
+	return turn.UserFacingMessages()
 }
 
 func friendlyRunError(err error) string {
@@ -95,38 +189,30 @@ func friendlyRunError(err error) string {
 	lower := strings.ToLower(msg)
 	switch {
 	case errors.Is(err, context.DeadlineExceeded), strings.Contains(lower, "timeout"), strings.Contains(lower, "deadline exceeded"):
-		return "这次模型或工具调用超时了。你可以稍后重试，或把请求拆得更短一些。"
-	case strings.Contains(lower, "tls handshake timeout"), strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"):
-		return "网络连接暂时不可用，模型或外部工具没有响应。请稍后重试。"
-	case strings.Contains(lower, "validate tool arguments"), strings.Contains(lower, "tool arguments json"), strings.Contains(lower, "unmarshal completion json"):
-		return "这次我没有生成有效的工具参数，已停止本轮以避免继续误操作。请换一种更明确的说法再试。"
-	case strings.Contains(lower, "unknown tool provider"), strings.Contains(lower, "unknown tool"):
-		return "我选择了当前不可用的工具。你可以先让我“列出当前有哪些工具 provider”，再指定要用的工具。"
-	case strings.Contains(lower, "goal not met after"):
-		return "我尝试了多次仍没有找到可行路径，已停止本轮。请补充更多上下文，或明确希望使用哪个工具。"
+		return "这次模型或工具调用超时了。请稍后重试，或把请求拆得更短一些。"
+	case strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"), strings.Contains(lower, "tls handshake timeout"):
+		return "网络连接暂时不可用，模型或外部工具没有响应。"
+	case strings.Contains(lower, "invalid arguments"), strings.Contains(lower, "decision json"):
+		return "模型没有生成有效的结构化动作，本轮已停止。详细原因已写入 agent 日志。"
 	default:
-		return "本轮执行失败，详细原因已写入 agent 日志。你可以调整请求后重试。"
+		return "本轮执行失败，详细原因已写入 agent 日志。"
 	}
 }
 
-// Close closes the workspace database and drops dispatcher references.
 func (r *Runtime) Close() error {
 	var err error
-	if r.data != nil {
-		if r.Dispatcher != nil && r.Dispatcher.ToolRegistry != nil {
-			if cerr := r.Dispatcher.ToolRegistry.Close(); cerr != nil {
-				err = errors.Join(err, fmt.Errorf("close tool registry: %w", cerr))
-			}
+	if r.tools != nil {
+		if closeErr := r.tools.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
 		}
+		r.tools = nil
 	}
 	if r.data != nil {
-		if cerr := r.data.Close(); cerr != nil {
-			err = errors.Join(err, fmt.Errorf("close data db: %w", cerr))
+		if closeErr := r.data.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
 		}
 		r.data = nil
 	}
-	if r.Dispatcher != nil {
-		r.Dispatcher = nil
-	}
+	r.loop = nil
 	return err
 }

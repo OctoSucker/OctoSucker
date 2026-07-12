@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -48,7 +48,7 @@ func (s *RemoteSession) Name() (string, string) {
 }
 
 func (s *RemoteSession) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
-	s.Tools = make(map[string]*mcp.Tool)
+	loaded := make(map[string]*mcp.Tool)
 	var cursor string
 	for {
 		res, err := s.sess.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
@@ -59,16 +59,19 @@ func (s *RemoteSession) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
 			if t == nil || t.Name == "" {
 				continue
 			}
-			s.Tools[t.Name] = t
+			loaded[t.Name] = t
 		}
 		if res.NextCursor == "" {
 			break
 		}
 		cursor = res.NextCursor
 	}
-	var tools []*mcp.Tool
-	for tool := range s.Tools {
-		tools = append(tools, s.Tools[tool])
+	s.mu.Lock()
+	s.Tools = loaded
+	s.mu.Unlock()
+	tools := make([]*mcp.Tool, 0, len(loaded))
+	for _, tool := range loaded {
+		tools = append(tools, tool)
 	}
 	return tools, nil
 }
@@ -76,9 +79,6 @@ func (s *RemoteSession) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
 func (s *RemoteSession) HasTool(tool string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if len(s.Tools) == 0 {
-		s.ToolList(context.Background())
-	}
 	_, ok := s.Tools[tool]
 	return ok
 }
@@ -86,9 +86,6 @@ func (s *RemoteSession) HasTool(tool string) bool {
 func (s *RemoteSession) Tool(tool string) (*mcp.Tool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if len(s.Tools) == 0 {
-		s.ToolList(context.Background())
-	}
 	t, ok := s.Tools[tool]
 	if !ok {
 		return nil, fmt.Errorf("mcp: tool %q not exposed by MCP server", tool)
@@ -97,8 +94,6 @@ func (s *RemoteSession) Tool(tool string) (*mcp.Tool, error) {
 }
 
 func (s *RemoteSession) Invoke(ctx context.Context, localTool string, arguments map[string]any) (types.ToolResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	ok := s.HasTool(localTool)
 	if !ok {
 		return types.ToolResult{Err: fmt.Errorf("mcp: tool %q not exposed by MCP server", localTool)}, fmt.Errorf("mcp: tool %q not exposed by MCP server", localTool)

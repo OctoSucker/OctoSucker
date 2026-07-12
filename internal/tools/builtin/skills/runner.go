@@ -3,482 +3,257 @@ package skillsbuiltin
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
-	"unicode/utf8"
 
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	"github.com/OctoSucker/octosucker/internal/skills"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"gopkg.in/yaml.v3"
 )
 
 const (
-	SkillsProviderName = "skills"
-	ToolGetRootDir     = "get_skills_root_dir"
-	ToolReloadSkills   = "reload_skills"
-	ToolListSkills     = "list_skills"
-	ToolReadSkill      = "read_skill"
-
-	defaultReadLimitRunes = 8000
-	maxReadLimitRunes     = 50000
+	ProviderName      = "skills"
+	ToolGetRootDir    = "get_skills_root_dir"
+	ToolListSkills    = "list_skills"
+	ToolActivateSkill = "activate_skill"
+	ToolReadResource  = "read_skill_resource"
 )
 
-// Runner is the skills Provider: dir is the skills root (planner “root” text); byName indexes *.md skills
-// (planner listing is built from it — same data the former PromptBundle carried).
+// Runner exposes a validated Agent Skills catalog through MCP-shaped tools.
 type Runner struct {
-	dir    string
-	byName map[string]SkillMeta
+	catalog *skills.Catalog
 }
 
-// NewRunner scans dir for *.md skill files and returns the skills tool backend.
 func NewRunner(dir string) (*Runner, error) {
-	if dir == "" {
-		return nil, fmt.Errorf("skills builtin: directory is required")
-	}
-	r := &Runner{dir: dir}
-	if err := r.Reload(); err != nil {
+	catalog, err := skills.NewCatalog(dir)
+	if err != nil {
 		return nil, err
 	}
-	return r, nil
+	return &Runner{catalog: catalog}, nil
 }
 
-// Name is the stable tool-provider name (Registry.providersByName key); not an MCP tool name.
 func (r *Runner) Name() (string, string) {
-	return SkillsProviderName, "Markdown skills directory: list, read, reload skill prompts."
+	return ProviderName, "Directory-based Agent Skills with explicit activation and on-demand resources."
 }
 
 func (r *Runner) RootDir() string {
-	if r == nil {
+	if r == nil || r.catalog == nil {
 		return ""
 	}
-	return r.dir
+	return r.catalog.Root()
 }
 
-func (r *Runner) Reload() error {
-	if r == nil {
-		return fmt.Errorf("skills builtin: backend is nil")
-	}
-	if r.dir == "" {
-		return fmt.Errorf("skills builtin: directory is required")
-	}
-	byName, err := scanSkillDir(r.dir)
-	if err != nil {
-		return err
-	}
-	r.byName = byName
-	return nil
-}
-
-func scanSkillDir(dir string) (map[string]SkillMeta, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("skills builtin: read dir %q: %w", dir, err)
-	}
-	byName := make(map[string]SkillMeta)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
-			continue
-		}
-		base := filepath.Base(entry.Name())
-		stem := strings.TrimSuffix(base, filepath.Ext(base))
-		fullPath := filepath.Join(dir, base)
-		st, statErr := os.Stat(fullPath)
-		if statErr != nil {
-			return nil, fmt.Errorf("skills builtin: stat %q: %w", fullPath, statErr)
-		}
-		meta, err := parseSkillMeta(fullPath, stem, base, st.Size())
-		if err != nil {
-			return nil, err
-		}
-		byName[stem] = meta
-	}
-	return byName, nil
-}
-
-type skillFrontmatter struct {
-	Name             string         `yaml:"name"`
-	Description      string         `yaml:"description"`
-	OctoSuckerPlugin *cliPluginYAML `yaml:"octosucker_plugin"`
-}
-
-type cliPluginYAML struct {
-	Type     string            `yaml:"type"`
-	Provider string            `yaml:"provider"`
-	Command  string            `yaml:"command"`
-	WorkDir  string            `yaml:"work_dir"`
-	Env      map[string]string `yaml:"env"`
-	Tools    []CLIPluginTool   `yaml:"tools"`
-}
-
-func parseSkillMeta(fullPath, stem, base string, byteSize int64) (SkillMeta, error) {
-	meta := SkillMeta{
-		Name:       stem,
-		SourceFile: filepath.ToSlash(base),
-		SourcePath: fullPath,
-		ByteSize:   byteSize,
-	}
-	raw, err := os.ReadFile(fullPath)
-	if err != nil {
-		return SkillMeta{}, fmt.Errorf("skills builtin: read %q: %w", fullPath, err)
-	}
-	fm, ok, err := parseFrontmatter(raw)
-	if err != nil {
-		return SkillMeta{}, fmt.Errorf("skills builtin: parse frontmatter %q: %w", fullPath, err)
-	}
-	if !ok {
-		return meta, nil
-	}
-	if strings.TrimSpace(fm.Name) != "" {
-		meta.Name = strings.TrimSpace(fm.Name)
-	}
-	meta.Description = strings.TrimSpace(fm.Description)
-	meta.Summary = extractSkillSummary(raw, meta.Description)
-	if fm.OctoSuckerPlugin != nil {
-		spec, err := normalizeCLIPluginSpec(fm.OctoSuckerPlugin)
-		if err != nil {
-			return SkillMeta{}, fmt.Errorf("skills builtin: invalid plugin spec in %q: %w", fullPath, err)
-		}
-		meta.CLIPlugin = spec
-	}
-	return meta, nil
-}
-
-func extractSkillSummary(raw []byte, description string) string {
-	if desc := strings.TrimSpace(description); desc != "" {
-		return clipSummary(desc, 320)
-	}
-	body := stripFrontmatter(string(raw))
-	for _, line := range strings.Split(body, "\n") {
-		t := strings.TrimSpace(line)
-		if t == "" || t == "---" {
-			continue
-		}
-		t = strings.TrimPrefix(t, "#")
-		t = strings.TrimSpace(t)
-		if t != "" {
-			return clipSummary(t, 320)
-		}
-	}
-	return ""
-}
-
-func stripFrontmatter(text string) string {
-	if !strings.HasPrefix(text, "---\n") {
-		return text
-	}
-	rest := text[len("---\n"):]
-	idx := strings.Index(rest, "\n---")
-	if idx < 0 {
-		return text
-	}
-	return rest[idx+len("\n---"):]
-}
-
-func clipSummary(s string, maxRunes int) string {
-	r := []rune(strings.Join(strings.Fields(s), " "))
-	if len(r) <= maxRunes {
-		return string(r)
-	}
-	return string(r[:maxRunes]) + "…"
-}
-
-func parseFrontmatter(raw []byte) (skillFrontmatter, bool, error) {
-	text := string(raw)
-	if !strings.HasPrefix(text, "---\n") {
-		return skillFrontmatter{}, false, nil
-	}
-	rest := text[len("---\n"):]
-	idx := strings.Index(rest, "\n---")
-	if idx < 0 {
-		return skillFrontmatter{}, false, nil
-	}
-	body := rest[:idx]
-	var fm skillFrontmatter
-	if err := yaml.Unmarshal([]byte(body), &fm); err != nil {
-		return skillFrontmatter{}, false, err
-	}
-	return fm, true, nil
-}
-
-func normalizeCLIPluginSpec(in *cliPluginYAML) (*CLIPluginSpec, error) {
-	if in == nil {
-		return nil, nil
-	}
-	if typ := strings.TrimSpace(in.Type); typ != "" && typ != "cli" {
-		return nil, fmt.Errorf("octosucker_plugin.type must be %q", "cli")
-	}
-	provider := strings.TrimSpace(in.Provider)
-	if provider == "" {
-		return nil, fmt.Errorf("octosucker_plugin.provider is required")
-	}
-	command := strings.TrimSpace(in.Command)
-	if command == "" {
-		return nil, fmt.Errorf("octosucker_plugin.command is required")
-	}
-	if len(in.Tools) == 0 {
-		return nil, fmt.Errorf("octosucker_plugin.tools is required")
-	}
-	spec := &CLIPluginSpec{
-		Provider: provider,
-		Command:  command,
-		WorkDir:  strings.TrimSpace(in.WorkDir),
-		Env:      in.Env,
-		Tools:    make([]CLIPluginTool, 0, len(in.Tools)),
-	}
-	for i, tool := range in.Tools {
-		name := strings.TrimSpace(tool.Name)
-		if name == "" {
-			return nil, fmt.Errorf("octosucker_plugin.tools[%d].name is required", i)
-		}
-		if len(tool.Args) == 0 {
-			return nil, fmt.Errorf("octosucker_plugin.tools[%d].args is required", i)
-		}
-		spec.Tools = append(spec.Tools, CLIPluginTool{
-			Name:        name,
-			Description: strings.TrimSpace(tool.Description),
-			InputSchema: tool.InputSchema,
-			Args:        append([]string(nil), tool.Args...),
-		})
-	}
-	return spec, nil
-}
-
-func (r *Runner) AllSkills() []SkillMeta {
-	if r == nil {
+func (r *Runner) AllSkills() []skills.Skill {
+	if r == nil || r.catalog == nil {
 		return nil
 	}
-	names := make([]string, 0, len(r.byName))
-	for k := range r.byName {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	out := make([]SkillMeta, 0, len(names))
-	for _, name := range names {
-		out = append(out, r.byName[name])
-	}
-	return out
+	return r.catalog.All()
 }
 
-func (r *Runner) getSkillMeta(name string) (SkillMeta, bool) {
-	if r == nil {
-		return SkillMeta{}, false
-	}
-	sk, ok := r.byName[name]
-	return sk, ok
-}
-
-func emptyObjectSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"properties":           map[string]any{},
-		"additionalProperties": false,
+func (r *Runner) HasTool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case ToolGetRootDir, ToolListSkills, ToolActivateSkill, ToolReadResource:
+		return true
+	default:
+		return false
 	}
 }
 
-func readSkillInputSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"name": map[string]any{
-				"type":        "string",
-				"description": "Skill name (markdown stem) as returned by list_skills",
-			},
-			"offset_runes": map[string]any{
-				"type":        "integer",
-				"description": "0-based rune offset into the file; omit or 0 for start. Use next_offset_runes from the previous read_skill until eof.",
-				"minimum":     0,
-			},
-			"limit_runes": map[string]any{
-				"type":        "integer",
-				"description": fmt.Sprintf("Max runes to return (default %d, max %d)", defaultReadLimitRunes, maxReadLimitRunes),
-				"minimum":     1,
-				"maximum":     maxReadLimitRunes,
-			},
-		},
-		"additionalProperties": false,
+func (r *Runner) Tool(name string) (*mcp.Tool, error) {
+	for _, tool := range r.tools() {
+		if tool.Name == strings.TrimSpace(name) {
+			return tool, nil
+		}
+	}
+	return nil, fmt.Errorf("skills builtin: unknown tool %q", name)
+}
+
+func (r *Runner) ToolList(context.Context) ([]*mcp.Tool, error) {
+	return r.tools(), nil
+}
+
+func (r *Runner) Invoke(_ context.Context, tool string, arguments map[string]any) (types.ToolResult, error) {
+	switch strings.TrimSpace(tool) {
+	case ToolGetRootDir:
+		return types.ToolResult{Output: map[string]any{"skills_root_dir": r.RootDir()}}, nil
+	case ToolListSkills:
+		return types.ToolResult{Output: map[string]any{"skills": r.descriptors()}}, nil
+	case ToolActivateSkill:
+		return r.activate(arguments)
+	case ToolReadResource:
+		return r.readResource(arguments)
+	default:
+		err := fmt.Errorf("skills builtin: unknown tool %q", tool)
+		return types.ToolResult{Err: err}, err
 	}
 }
 
-func (r *Runner) builtinTools() []*mcp.Tool {
+func (r *Runner) Assess(tool string, _ map[string]any) types.ToolPolicy {
+	switch strings.TrimSpace(tool) {
+	case ToolActivateSkill, ToolReadResource:
+		return types.ToolPolicy{
+			Capabilities: []string{"workspace_read", "instructions"},
+			Risk:         "low",
+			Summary:      "loads workspace-owned Agent Skill instructions",
+			OutputTrust:  types.TrustWorkspaceInstruction,
+		}
+	default:
+		return types.ToolPolicy{
+			Capabilities: []string{"runtime_metadata"},
+			Risk:         "low",
+			Summary:      "reads Agent Skills catalog metadata",
+			OutputTrust:  types.TrustRuntimeMetadata,
+		}
+	}
+}
+
+func (r *Runner) tools() []*mcp.Tool {
+	names := r.catalog.Names()
 	return []*mcp.Tool{
 		{
 			Name:        ToolGetRootDir,
-			Description: "Get local skills root directory (top-level *.md files are skills)",
+			Description: "Return the workspace Agent Skills root directory.",
 			InputSchema: emptyObjectSchema(),
 		},
 		{
 			Name:        ToolListSkills,
-			Description: "List markdown skill files (name, path, size). Use read_skill to load content in pages.",
+			Description: "List available Agent Skills and their supporting resource files.",
 			InputSchema: emptyObjectSchema(),
 		},
 		{
-			Name:        ToolReadSkill,
-			Description: "Read one skill markdown file as UTF-8 text; paginate with offset_runes / limit_runes using next_offset_runes until eof.",
-			InputSchema: readSkillInputSchema(),
+			Name:        ToolActivateSkill,
+			Description: "Activate one exact Agent Skill. Its complete SKILL.md instructions remain active for the conversation.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"enum":        names,
+						"description": "Exact skill name from AVAILABLE SKILLS.",
+					},
+				},
+				"required":             []string{"name"},
+				"additionalProperties": false,
+			},
 		},
 		{
-			Name:        ToolReloadSkills,
-			Description: "Rescan the skills root for *.md files (picks up adds/removes/renames)",
-			InputSchema: emptyObjectSchema(),
+			Name:        ToolReadResource,
+			Description: "Read a supporting UTF-8 resource from an activated Agent Skill. Use only paths listed for that skill.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"skill": map[string]any{"type": "string", "enum": names},
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Resource path relative to the skill directory, as listed in AVAILABLE SKILLS.",
+					},
+					"offset_runes": map[string]any{"type": "integer", "minimum": 0},
+					"limit_runes":  map[string]any{"type": "integer", "minimum": 1, "maximum": skills.MaxResourceRunes},
+				},
+				"required":             []string{"skill", "path"},
+				"additionalProperties": false,
+			},
 		},
 	}
 }
 
-func (r *Runner) HasTool(name string) bool {
-	if name == "" {
-		return false
-	}
-	for _, t := range r.builtinTools() {
-		if t.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *Runner) Tool(tool string) (*mcp.Tool, error) {
-	for _, t := range r.builtinTools() {
-		if t.Name == tool {
-			return t, nil
-		}
-	}
-	return nil, fmt.Errorf("skills builtin: unknown tool %q", tool)
-}
-
-func (r *Runner) ToolList(ctx context.Context) ([]*mcp.Tool, error) {
-	return r.builtinTools(), nil
-}
-
-func (r *Runner) Invoke(ctx context.Context, localTool string, arguments map[string]any) (types.ToolResult, error) {
-	switch localTool {
-	case ToolGetRootDir:
-		return types.ToolResult{
-			Output: map[string]any{
-				"skills_root_dir": r.RootDir(),
-			},
-		}, nil
-	case ToolListSkills:
-		all := r.AllSkills()
-		list := make([]map[string]any, 0, len(all))
-		for _, sk := range all {
-			list = append(list, map[string]any{
-				"name":        sk.Name,
-				"description": sk.Description,
-				"summary":     sk.Summary,
-				"source_file": sk.SourceFile,
-				"source_path": sk.SourcePath,
-				"byte_size":   sk.ByteSize,
-			})
-		}
-		return types.ToolResult{Output: map[string]any{"skills": list}}, nil
-	case ToolReadSkill:
-		return r.invokeReadSkill(arguments)
-	case ToolReloadSkills:
-		if err := r.Reload(); err != nil {
-			return types.ToolResult{Err: err}, err
-		}
-		all := r.AllSkills()
-		names := make([]string, 0, len(all))
-		for _, sk := range all {
-			names = append(names, sk.Name)
-		}
-		return types.ToolResult{
-			Output: map[string]any{
-				"skills_root_dir": r.RootDir(),
-				"loaded_count":    len(all),
-				"skills":          names,
-			},
-		}, nil
-	default:
-		return types.ToolResult{}, fmt.Errorf("skills builtin: unknown tool %q", localTool)
-	}
-}
-
-func (r *Runner) invokeReadSkill(args map[string]any) (types.ToolResult, error) {
-	if args == nil {
-		return types.ToolResult{Err: fmt.Errorf("skills builtin: read_skill requires arguments")}, fmt.Errorf("skills builtin: read_skill requires arguments")
-	}
-	rawName, ok := args["name"].(string)
-	if !ok || strings.TrimSpace(rawName) == "" {
-		return types.ToolResult{Err: fmt.Errorf("skills builtin: read_skill argument \"name\" must be non-empty string")}, fmt.Errorf("skills builtin: read_skill argument \"name\" must be non-empty string")
-	}
-	name := strings.TrimSpace(rawName)
-	meta, ok := r.getSkillMeta(name)
+func (r *Runner) activate(arguments map[string]any) (types.ToolResult, error) {
+	name, _ := arguments["name"].(string)
+	skill, ok := r.catalog.Get(strings.TrimSpace(name))
 	if !ok {
-		return types.ToolResult{Err: fmt.Errorf("skills builtin: no skill named %q", name)}, fmt.Errorf("skills builtin: no skill named %q", name)
+		err := fmt.Errorf("skills builtin: no skill named %q", strings.TrimSpace(name))
+		return types.ToolResult{Err: err}, err
 	}
-	offset, err := intFromArgs(args, "offset_runes", 0)
-	if err != nil {
-		return types.ToolResult{Err: fmt.Errorf("skills builtin: read_skill offset_runes: %w", err)}, fmt.Errorf("skills builtin: read_skill offset_runes: %w", err)
+	resources := make([]string, 0, len(skill.Resources))
+	for _, resource := range skill.Resources {
+		resources = append(resources, resource.Path)
 	}
-	if offset < 0 {
-		return types.ToolResult{Err: fmt.Errorf("skills builtin: read_skill offset_runes must be >= 0")}, fmt.Errorf("skills builtin: read_skill offset_runes must be >= 0")
-	}
-	limit, err := intFromArgs(args, "limit_runes", defaultReadLimitRunes)
-	if err != nil {
-		return types.ToolResult{Err: fmt.Errorf("skills builtin: read_skill limit_runes: %w", err)}, fmt.Errorf("skills builtin: read_skill limit_runes: %w", err)
-	}
-	if limit < 1 {
-		limit = defaultReadLimitRunes
-	}
-	if limit > maxReadLimitRunes {
-		limit = maxReadLimitRunes
-	}
-
-	raw, err := os.ReadFile(meta.SourcePath)
-	if err != nil {
-		return types.ToolResult{Err: fmt.Errorf("skills builtin: read %q: %w", meta.SourcePath, err)}, fmt.Errorf("skills builtin: read %q: %w", meta.SourcePath, err)
-	}
-	if !utf8.Valid(raw) {
-		return types.ToolResult{Err: fmt.Errorf("skills builtin: %q is not valid UTF-8", meta.SourcePath)}, fmt.Errorf("skills builtin: %q is not valid UTF-8", meta.SourcePath)
-	}
-	rs := []rune(string(raw))
-	total := len(rs)
-	if offset > total {
-		offset = total
-	}
-	end := offset + limit
-	if end > total {
-		end = total
-	}
-	chunk := string(rs[offset:end])
-	next := end
-	eof := next >= total
-
 	return types.ToolResult{
 		Output: map[string]any{
-			"name":               meta.Name,
-			"source_path":        meta.SourcePath,
-			"source_file":        meta.SourceFile,
-			"text":               chunk,
-			"offset_runes":       offset,
-			"limit_runes":        limit,
-			"total_runes":        total,
-			"next_offset_runes":  next,
-			"eof":                eof,
-			"returned_rune_span": end - offset,
+			"activated":   skill.Name,
+			"description": skill.Description,
+			"version":     skill.Version(),
+			"digest":      skill.Digest,
+			"resources":   resources,
 		},
+		Artifacts: []types.ContextArtifact{{
+			Kind:    types.ArtifactAgentSkill,
+			Name:    skill.Name,
+			Content: skill.Instructions,
+			Source:  skill.SourcePath,
+			Digest:  skill.Digest,
+			Trust:   types.TrustWorkspaceInstruction,
+		}},
 	}, nil
 }
 
-func intFromArgs(m map[string]any, key string, defaultVal int) (int, error) {
-	v, ok := m[key]
-	if !ok || v == nil {
-		return defaultVal, nil
+func (r *Runner) readResource(arguments map[string]any) (types.ToolResult, error) {
+	skillName, _ := arguments["skill"].(string)
+	path, _ := arguments["path"].(string)
+	offset, err := integerArgument(arguments, "offset_runes", 0)
+	if err != nil {
+		return types.ToolResult{Err: err}, err
 	}
-	switch x := v.(type) {
-	case float64:
-		return int(x), nil
+	limit, err := integerArgument(arguments, "limit_runes", skills.DefaultResourceRunes)
+	if err != nil {
+		return types.ToolResult{Err: err}, err
+	}
+	page, err := r.catalog.ReadResource(skillName, path, offset, limit)
+	if err != nil {
+		return types.ToolResult{Err: err}, err
+	}
+	return types.ToolResult{Output: map[string]any{
+		"skill":             page.Skill,
+		"path":              page.Path,
+		"text":              page.Text,
+		"offset_runes":      page.OffsetRunes,
+		"limit_runes":       page.LimitRunes,
+		"total_runes":       page.TotalRunes,
+		"next_offset_runes": page.NextOffsetRunes,
+		"eof":               page.EOF,
+	}}, nil
+}
+
+func (r *Runner) descriptors() []map[string]any {
+	all := r.AllSkills()
+	out := make([]map[string]any, 0, len(all))
+	for _, skill := range all {
+		resources := make([]string, 0, len(skill.Resources))
+		for _, resource := range skill.Resources {
+			resources = append(resources, resource.Path)
+		}
+		out = append(out, map[string]any{
+			"name":          skill.Name,
+			"description":   skill.Description,
+			"source_file":   skill.SourceFile,
+			"version":       skill.Version(),
+			"resources":     resources,
+			"allowed_tools": skill.AllowedTools,
+			"byte_size":     skill.ByteSize,
+		})
+	}
+	return out
+}
+
+func emptyObjectSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}
+}
+
+func integerArgument(arguments map[string]any, key string, fallback int) (int, error) {
+	value, ok := arguments[key]
+	if !ok || value == nil {
+		return fallback, nil
+	}
+	switch n := value.(type) {
 	case int:
-		return x, nil
+		return n, nil
 	case int64:
-		return int(x), nil
+		return int(n), nil
+	case float64:
+		if n != float64(int(n)) {
+			return 0, fmt.Errorf("skills builtin: %s must be an integer", key)
+		}
+		return int(n), nil
 	default:
-		return 0, fmt.Errorf("%q must be a number", key)
+		return 0, fmt.Errorf("skills builtin: %s must be an integer", key)
 	}
 }

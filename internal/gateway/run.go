@@ -70,7 +70,7 @@ func Run(ctx context.Context, agent Agent, cfg *config.Workspace, opt Options) e
 	if opt.EnableCmd {
 		go func() {
 			err := stdin.Run(ctx, func(ctx context.Context, text string) ([]string, error) {
-				return agent.RunTurn(ctx, text)
+				return agent.RunTurn(ctx, "stdin", text)
 			}, opt.AgentLogPath)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("stdin chat: %v", err)
@@ -80,8 +80,8 @@ func Run(ctx context.Context, agent Agent, cfg *config.Workspace, opt Options) e
 
 	if tg != nil {
 		go func() {
-			err := tg.RunPoll(ctx, func(ctx context.Context, _ int64, text string) ([]string, error) {
-				return agent.RunTurn(ctx, text)
+			err := tg.RunPoll(ctx, func(ctx context.Context, chatID int64, text string) ([]string, error) {
+				return agent.RunTurn(ctx, fmt.Sprintf("telegram:%d", chatID), text)
 			})
 			if err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("telegram poll: %v", err)

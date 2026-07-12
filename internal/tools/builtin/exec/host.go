@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 )
 
 func (r *Runner) runHost(ctx context.Context, wd, tool string, argv []string, args map[string]any) (types.ToolResult, error) {

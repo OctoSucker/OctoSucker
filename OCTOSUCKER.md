@@ -5,11 +5,14 @@ This repository contains a Go ReAct-style agent runtime.
 Runtime principles:
 
 - Keep execution serial by default. Do not introduce parallel tool execution unless the user explicitly asks for it.
-- Prefer deterministic intent routing for obvious workflows before asking the LLM to choose tools.
-- Preserve structured tool output and synthesize user-facing answers from accumulated evidence, not only the last step.
-- Treat tool/environment failures as actionable diagnostics. Do not retry commands that are missing binaries, missing environment variables, or blocked by the sandbox.
-- For Feishu group replies, use the external `feishu-gateway` -> `octosucker -message -` path. Do not embed webhook secrets in source files.
-- For U.S. market intelligence, collect structured data first, run LLM analysis second, and only send concise high-value messages to Feishu.
+- Keep `agentloop`, `planning`, `execution`, `evaluation`, and `responding` domain-agnostic. Never add keyword intent routing or a named business workflow to those packages.
+- Add executable capabilities through MCP or typed providers. Use Skills only for procedural guidance and structured-tool composition.
+- Never make the model reconstruct a maintained CLI's executable name or argv from Skill prose.
+- Preserve the append-only trajectory and synthesize user-facing answers from all useful observations, not only the last tool output.
+- Treat tool/environment failures as actionable diagnostics. Never repeat the same failed tool and arguments in one turn.
+- Learned routing is advisory. It must never bypass the planner or schema validation.
+- Keep tool providers independent from runtime state by exchanging types through `internal/toolcontract`.
+- Do not embed webhook secrets or API keys in source files.
 
 Validation:
 

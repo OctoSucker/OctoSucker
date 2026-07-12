@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -22,4 +22,12 @@ type Provider interface {
 type ClosableProvider interface {
 	Provider
 	Close() error
+}
+
+// PolicyProvider describes call-specific capabilities and trust for tools it
+// owns. Providers with richer semantics should implement this instead of
+// relying on global command-name heuristics.
+type PolicyProvider interface {
+	Provider
+	Assess(tool string, arguments map[string]any) types.ToolPolicy
 }

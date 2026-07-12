@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/OctoSucker/octosucker/config"
-	types "github.com/OctoSucker/octosucker/internal/runtime/model"
+	types "github.com/OctoSucker/octosucker/internal/toolcontract"
 )
 
 type containerInspect struct {
