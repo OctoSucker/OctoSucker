@@ -1,177 +1,123 @@
 # OctoSucker
 
-OctoSucker is a learning project for exploring how a practical personal AI
-assistant should be designed. It is not an attempt to reproduce every feature
-of a coding agent. The project focuses on a smaller question: how can an agent
-remain understandable, extensible, and useful to ordinary desktop users while
-it performs real work?
+OctoSucker 是一个用于探索实用型个人 AI 助理应当如何设计的学习项目。它并不试图复刻代码 Agent 的全部功能，而是聚焦一个更具体的问题：当 Agent 真正操作工具、完成工作时，如何让它既容易理解和扩展，又能被普通桌面用户自然使用？
 
-The current answer is a serial Go runtime exposed through an asynchronous Task
-API, with a deliberately small and inspectable reasoning loop:
+目前的答案是一个使用 Go 编写的串行运行时。它通过异步 Task API 对外提供服务，并刻意保持推理循环短小、清晰、可检查：
 
 ```text
 Planner -> Executor -> Step Evaluator -> Planner or Responder
 ```
 
-The planner chooses one action at a time. Every tool call, request for user
-input, and direct model response becomes a user-visible Step. The runtime can
-pause for structured input or approval and then resume the same Task.
+Planner 每次只选择一个动作。每次工具调用、信息补充请求和模型直接回复都会形成用户可见的 Step。运行时可以暂停并等待结构化输入或风险确认，之后继续执行同一个 Task。
 
-## Design Principles
+## 设计原则
 
-### One assistant, many Tasks
+### 一个助理，多个 Task
 
-The user should experience one persistent digital assistant rather than a list
-of unrelated chat sessions. Internally, work is still divided into Tasks because
-execution needs clear lifecycle, failure, approval, and audit boundaries. A Task
-is therefore an execution unit, not the product's primary mental model.
+用户面对的应该是一个持续存在的数字助理，而不是一组相互割裂的聊天会话。但在系统内部，工作仍然需要划分为多个 Task，因为每次执行都需要明确的生命周期、失败状态、审批边界和审计记录。因此，Task 是执行单元，而不是产品要求用户理解的主要概念。
 
-When a Task needs more information, the next input continues that Task. After a
-Task finishes, the next request creates a child Task while preserving assistant
-context. This keeps the interface continuous without pretending that unrelated
-work belongs to one execution.
+当 Task 缺少信息时，用户的下一次输入会继续当前 Task。Task 完成后，新的请求会创建一个子 Task，同时保留助理上下文。这样既能维持连续的使用体验，也不会把互不相关的工作伪装成同一次执行。
 
-### Plan one step from current evidence
+### 根据当前证据，每次只规划一步
 
-OctoSucker does not ask the model to invent a complete execution graph before
-work begins. For open-ended office tasks, later actions often depend on tool
-results or information that the user has not supplied yet. A large up-front
-plan can look convincing while being based on assumptions.
+OctoSucker 不要求模型在执行开始前编造一张完整的执行图。对于开放式办公任务，后续动作往往取决于工具结果，或者取决于用户尚未提供的信息。一份庞大的预先计划可能看起来很完整，实际上却建立在未经验证的假设上。
 
-The planner instead chooses one next action from the current goal, context, and
-observations. After execution, an evaluator judges whether the result moved the
-goal forward, and the planner decides again:
+Planner 会根据当前目标、上下文和已有观察选择下一个动作。动作执行后，Evaluator 判断结果是否推动了目标，再由 Planner 继续决策：
 
 ```text
-Goal + Context
+目标 + 上下文
       |
       v
-Plan one action -> Execute -> Evaluate usefulness and progress
-      ^                            |
-      |____________________________|
-                    |
-                    v
-          Respond or request input
+规划一个动作 -> 执行 -> 评估有效性与目标进度
+      ^                         |
+      |_________________________|
+                  |
+                  v
+          回复用户或请求补充信息
 ```
 
-This is intentionally serial. Parallel execution may improve throughput, but it
-also increases coordination cost and makes early behavior harder to understand.
-For a personal assistant still being validated, debuggability and predictable
-state transitions are more valuable than speculative concurrency.
+当前串行执行是有意为之。并行可以提高吞吐量，但也会增加协调成本，让早期行为更难理解。对于仍在验证中的个人助理，可调试性和可预测的状态转换比过早引入并发更重要。
 
-### Separate execution facts from goal completion
+### 区分执行事实与目标完成
 
-A successful tool call only proves that the tool completed its contract. It
-does not prove that the user's goal has been achieved. OctoSucker treats the
-structured result returned by a builtin tool, MCP server, or typed provider as
-the execution fact; the evaluator then judges that result against the Step goal
-and the overall user goal.
+工具调用成功，只能证明工具完成了自己的契约，并不能证明用户目标已经实现。OctoSucker 将内置工具、MCP 服务或类型化 Provider 返回的结构化结果视为执行事实，再由 Evaluator 根据当前 Step 目标和用户总目标判断结果是否有效。
 
-This avoids two opposite errors: declaring success merely because a command
-exited successfully, and repeatedly rechecking trusted tool results in an
-endless chain of verification. Tool correctness belongs at the tool boundary;
-goal-level judgment belongs in the agent loop.
+这种设计避免两个相反的错误：一是看到命令成功退出就直接宣布任务完成；二是不相信任何工具返回值，不断追加核验，最终陷入无穷的不信任链。工具正确性应由工具边界负责，目标层面的判断应由 Agent Loop 负责。
 
-### Make reasoning inspectable without exposing hidden chain of thought
+### 让执行过程可观察，而不是暴露隐藏思维链
 
-The interface should show what the agent is doing, not private model reasoning.
-Every tool action, information request, and direct response becomes a concise
-Step with a title, status, summary, and evaluation. Failed attempts remain in
-the trajectory so later decisions and debugging are based on the actual run.
+界面应该告诉用户 Agent 正在做什么，但不应展示模型的私有推理。每个工具动作、信息请求和直接回复都会形成一个简洁的 Step，其中包含标题、状态、摘要和评估。失败尝试也会保留在执行轨迹中，使后续决策和问题排查基于真实发生过的过程。
 
-The user sees operational progress and decisions rather than raw prompts or
-hidden reasoning traces.
+用户看到的是执行进度和决策结果，而不是原始 Prompt 或隐藏推理文本。
 
-### Use structured interaction when the information is structured
+### 信息是结构化的，交互也应当结构化
 
-An empty chat box places the entire burden of describing a task on the user.
-That works well for people who already understand prompts, tools, and file
-paths, but it raises the barrier for ordinary office users.
+一个空白对话框会把描述任务的全部负担交给用户。对于已经理解 Prompt、工具和文件路径的人，这种方式很灵活；但对于普通办公用户，它也构成了明显的使用门槛。
 
-Natural language remains the entry point for open intent. Once the agent knows
-which specific fields are missing, it can return a structured form with labels,
-choices, validation, and defaults. High-risk actions similarly become explicit
-approval controls inside the normal conversation flow. The UI adapts to the
-current Task instead of forcing every interaction through prose.
+自然语言仍然适合表达开放意图。当 Agent 已经知道缺少哪些具体字段时，它可以返回带有标签、选项、校验和默认值的结构化表单。高风险动作同样应在正常对话流程中转换成明确的审批控件。界面需要适应当前 Task，而不是强迫所有交互都通过文字描述完成。
 
-### Keep the runtime generic and capability boundaries deterministic
+### 保持运行时通用，让能力边界具备确定性
 
-The core loop should not contain special cases for individual websites,
-markets, messaging products, or office workflows. New capabilities enter
-through explicit boundaries:
+核心循环不应包含针对某个网站、市场、消息产品或办公流程的特殊逻辑。新能力通过明确的边界接入：
 
-- MCP for structured external services.
-- Typed executable providers for deterministic command construction.
-- Agent Skills for procedural knowledge and workflow guidance.
+- MCP 用于结构化的外部服务。
+- 类型化可执行 Provider 用于确定性地构造命令。
+- Agent Skill 用于提供过程知识和工作流指导。
 
-A Skill document can teach the model when and why to use a capability, but it
-should not force the model to reconstruct an executable protocol from prose.
-Stable commands, arguments, validation, and result shapes belong in MCP or a
-typed provider.
+Skill 文档可以告诉模型何时、为何使用某项能力，但不应迫使模型从自然语言中重建可执行协议。稳定的命令名称、参数、校验规则和返回结构应当放在 MCP 或类型化 Provider 中。
 
-### Learn conservatively
+### 保守地学习
 
-Past execution can improve future tool routing, but learned recommendations are
-advisory. They may help the planner choose among capabilities; they must not
-bypass planning, schema validation, risk policy, or evaluation. This keeps
-learning useful without turning historical noise into hidden control flow.
+历史执行可以改善未来的工具路由，但学习结果只能作为建议。它可以帮助 Planner 在多个能力之间做选择，却不能绕过规划、Schema 校验、风险策略或结果评估。这样既能利用经验，也不会让历史噪声变成隐藏的控制逻辑。
 
-### Prefer explicit product boundaries over premature infrastructure
+### 明确产品边界，避免过早建设基础设施
 
-OctoSucker currently favors a local, user-owned runtime, serial execution,
-low-frequency HTTP polling, and in-memory Task state. These are deliberate
-tradeoffs for a single-user learning project. Persistence, parallel execution,
-subagents, and streaming transports should be added when observed usage proves
-their value, not because mature agent products happen to contain them.
+OctoSucker 当前选择本地运行、用户自有、串行执行、低频 HTTP 轮询和内存 Task 状态。这些都是针对单用户学习项目的明确取舍。Task 持久化、并行执行、子 Agent 和流式传输，应当在真实使用证明其价值后再加入，而不是因为成熟 Agent 产品拥有这些功能就提前照搬。
 
-## Current Capabilities
+## 当前能力
 
-- Serial, one-step planning with bounded retries and execution limits.
-- Separate planner, evaluator, and responder model configuration.
-- Role-specific context budgets and structured trajectory compaction.
-- Builtin, MCP, and typed executable tools in one schema-validated catalog.
-- Directory-based Agent Skills with explicit activation and on-demand resources.
-- Asynchronous Tasks with messages, Steps, status, result, and error state.
-- Structured forms when the agent needs missing information.
-- Explicit approval before high-risk tool execution.
-- Learned tool-routing recommendations without bypassing the planner.
-- Local HTTP and optional Telegram ingress.
+- 串行、单步规划，并具有重试次数和执行上限。
+- Planner、Evaluator 和 Responder 可分别配置不同模型。
+- 按角色分配上下文预算，并对执行轨迹进行结构化压缩。
+- 内置工具、MCP 和类型化可执行工具统一进入经过 Schema 校验的工具目录。
+- 目录式 Agent Skill，支持显式激活和按需读取资源。
+- 异步 Task，包含消息、Step、状态、结果和错误信息。
+- Agent 缺少信息时可生成结构化表单。
+- 高风险工具执行前需要用户明确批准。
+- 学习到的工具路由只能提供建议，不能绕过 Planner。
+- 支持本地 HTTP 入口和可选的 Telegram 入口。
 
-Task state is currently in memory. Restarting the process clears Tasks, but
-workspace SQLite data, learned routing data, Skills, knowledge, and logs remain
-on disk.
+Task 状态目前只保存在内存中。进程重启后 Task 会被清除，但 Workspace SQLite 数据、路由学习数据、Skill、知识文件和日志仍保存在磁盘中。
 
-## Architecture
+## 代码架构
 
-| Path | Responsibility |
+| 路径 | 职责 |
 | --- | --- |
-| `cmd/octosucker` | Service entrypoint and lifecycle |
-| `config` | Workspace configuration and path resolution |
-| `internal/runtime/agentloop` | Serial turn controller and execution limits |
-| `internal/runtime/model` | Append-only turn, Step, observation, and assessment state |
-| `internal/runtime/contextmanager` | Role-specific context selection and compaction |
-| `internal/runtime/planning` | Structured action-or-respond decisions |
-| `internal/runtime/execution` | Tool invocation, approval, and result normalization |
-| `internal/runtime/evaluation` | Step usefulness and goal-progress evaluation |
-| `internal/runtime/responding` | Final user-facing synthesis |
-| `internal/runtime/conversation` | Bounded assistant context |
-| `internal/runtime/toolrouting` | Conservative learned routing recommendations |
-| `internal/task` | In-memory Task lifecycle and snapshots |
-| `internal/interaction` | Structured user-input forms |
-| `internal/skills` | Skill discovery, validation, activation, and resources |
-| `internal/toolcontract` | Tool DTOs, policies, and JSON Schema validation |
-| `internal/tools` | Builtin, MCP, OpenCLI, and executable providers |
-| `internal/storage` | Workspace SQLite persistence |
-| `internal/gateway` | HTTP and Telegram ingress assembly |
-| `internal/ingress/adminhttp` | Task, compatibility chat, and graph HTTP routes |
+| `cmd/octosucker` | 服务入口和生命周期管理 |
+| `config` | Workspace 配置和路径解析 |
+| `internal/runtime/agentloop` | 串行 Turn 控制和执行限制 |
+| `internal/runtime/model` | 只追加的 Turn、Step、Observation 和 Assessment 状态 |
+| `internal/runtime/contextmanager` | 按角色选择和压缩上下文 |
+| `internal/runtime/planning` | 生成结构化的执行或回复决策 |
+| `internal/runtime/execution` | 工具调用、风险审批和结果标准化 |
+| `internal/runtime/evaluation` | 评估 Step 有效性和目标进度 |
+| `internal/runtime/responding` | 生成面向用户的最终回复 |
+| `internal/runtime/conversation` | 维护有界的助理上下文 |
+| `internal/runtime/toolrouting` | 提供保守的学习型路由建议 |
+| `internal/task` | 内存 Task 生命周期和快照 |
+| `internal/interaction` | 结构化用户输入表单 |
+| `internal/skills` | Skill 发现、校验、激活和资源读取 |
+| `internal/toolcontract` | 工具 DTO、策略和 JSON Schema 校验 |
+| `internal/tools` | 内置工具、MCP、OpenCLI 和可执行 Provider |
+| `internal/storage` | Workspace SQLite 持久化 |
+| `internal/gateway` | 组装 HTTP 和 Telegram 入口 |
+| `internal/ingress/adminhttp` | Task、兼容 Chat 和 Graph HTTP 路由 |
 
-See [`internal/runtime/DESIGN.md`](internal/runtime/DESIGN.md) for the runtime
-contracts and loop invariants.
+运行时契约和循环不变量见 [`internal/runtime/DESIGN.md`](internal/runtime/DESIGN.md)。
 
 ## Workspace
 
-The service requires a workspace directory containing `config.json` and its
-agent-owned resources:
+服务需要一个包含 `config.json` 和 Agent 自有资源的 Workspace 目录：
 
 ```text
 workspace/
@@ -182,15 +128,13 @@ workspace/
 `-- logs/
 ```
 
-Start from the checked-in example:
+可以从仓库中的示例配置开始：
 
 ```bash
 cp workspace/config.example.json workspace/config.json
 ```
 
-At minimum, configure the OpenAI-compatible endpoint and the planner,
-evaluator, and responder models. To expose the desktop API, keep a local HTTP
-listener enabled:
+至少需要配置 OpenAI 兼容接口，以及 Planner、Evaluator 和 Responder 使用的模型。若要为桌面前端开放 API，需要启用本地 HTTP 监听：
 
 ```json
 {
@@ -200,22 +144,20 @@ listener enabled:
 }
 ```
 
-Do not commit real API keys, `workspace/config.json`, SQLite files, or logs.
+不要提交真实 API Key、`workspace/config.json`、SQLite 数据文件或日志。
 
-## Run
+## 启动服务
 
 ```bash
 go build -o octosucker ./cmd/octosucker
 ./octosucker -workspace ./workspace
 ```
 
-The process is a service. There is no terminal chat mode. With the example HTTP
-configuration, the API is available at `http://127.0.0.1:8090` and logs are
-written to `workspace/logs/agent.log`.
+OctoSucker 是一个服务进程，不再提供终端聊天模式。使用示例 HTTP 配置时，API 地址为 `http://127.0.0.1:8090`，日志写入 `workspace/logs/agent.log`。
 
 ## Task API
 
-Create a Task by submitting assistant input:
+提交助理输入以创建 Task：
 
 ```http
 POST /api/assistant/input
@@ -226,7 +168,7 @@ Content-Type: application/json
 }
 ```
 
-The server returns `202 Accepted` with an initial Task snapshot:
+服务返回 `202 Accepted` 和初始 Task 快照：
 
 ```json
 {
@@ -248,16 +190,15 @@ The server returns `202 Accepted` with an initial Task snapshot:
 }
 ```
 
-Read the latest snapshot with a low-frequency poll:
+通过低频轮询读取最新快照：
 
 ```http
 GET /api/tasks/{taskID}
 ```
 
-Task status is one of `running`, `waiting_input`, `waiting_approval`,
-`completed`, `failed`, or `cancelled`.
+Task 状态包括 `running`、`waiting_input`、`waiting_approval`、`completed`、`failed` 和 `cancelled`。
 
-When `pending_interaction` is present, submit its form values to the same Task:
+当快照中包含 `pending_interaction` 时，将表单值提交到同一个 Task：
 
 ```http
 POST /api/tasks/{taskID}/interactions/{interactionID}
@@ -270,7 +211,7 @@ Content-Type: application/json
 }
 ```
 
-Free-form input can also continue a Task that is in `waiting_input`:
+处于 `waiting_input` 状态的 Task 也可以通过自由文本继续执行：
 
 ```json
 {
@@ -279,11 +220,9 @@ Free-form input can also continue a Task that is in `waiting_input`:
 }
 ```
 
-If `active_task_id` identifies a terminal Task, the input creates a new child
-Task. Input is rejected while the active Task is still running or waiting for
-approval.
+如果 `active_task_id` 指向已经结束的 Task，本次输入会创建一个新的子 Task。当原 Task 仍在运行或等待审批时，新的自由文本输入会被拒绝。
 
-Resolve a pending high-risk action explicitly:
+待审批的高风险动作必须被明确处理：
 
 ```http
 POST /api/tasks/{taskID}/approvals/{approvalID}
@@ -294,26 +233,21 @@ Content-Type: application/json
 }
 ```
 
-Use `rejected` to deny it. The runtime resumes the suspended execution after
-either decision.
+使用 `rejected` 拒绝操作。无论批准还是拒绝，运行时都会恢复之前暂停的执行流程，并根据审批结果继续处理。
 
-`POST /api/chat` remains available for synchronous integrations such as
-Telegram-style adapters. The desktop frontend should use the Task API because
-it exposes progress, interactions, and approvals.
+`POST /api/chat` 仍保留给需要同步回复的集成，例如 Telegram 适配器。桌面前端应使用 Task API，因为只有 Task API 能暴露执行进度、结构化交互和风险审批状态。
 
-## Extension Model
+## 扩展模型
 
-Use one of these boundaries for new capabilities:
+新增能力时应选择以下边界之一：
 
-1. MCP for a structured external service.
-2. A typed provider that adapts an executable into schema-validated tools.
-3. A directory-based Agent Skill for procedural knowledge and workflow rules.
+1. 使用 MCP 接入结构化外部服务。
+2. 使用类型化 Provider 将可执行程序适配成经过 Schema 校验的工具。
+3. 使用目录式 Agent Skill 提供过程知识和工作流规则。
 
-A Skill is not an executable protocol. Stable integrations should not require
-the model to reconstruct a binary name, flags, or argv from prose. Keep
-`run_command` for genuinely ad hoc work.
+Skill 不是可执行协议。稳定集成不应要求模型根据文档重新拼接二进制名称、参数或 `argv`。`run_command` 只用于真正临时、无法预先建模的命令。
 
-Each Skill is a directory with a required `SKILL.md` and optional resources:
+每个 Skill 是一个目录，其中必须包含 `SKILL.md`，也可以附带其他资源：
 
 ```text
 skills/opencli/
@@ -322,11 +256,9 @@ skills/opencli/
     `-- authentication.md
 ```
 
-Only the Skill name and description enter the default catalog. Full
-instructions are injected after activation, and supporting resources are read
-on demand.
+默认工具目录只包含 Skill 的名称和描述。完整说明在 Skill 激活后才会注入上下文，其他资源按需读取。
 
-## Validation
+## 验证
 
 ```bash
 go test ./...
