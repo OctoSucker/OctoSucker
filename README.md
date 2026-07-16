@@ -1,78 +1,207 @@
 # OctoSucker
 
-OctoSucker is a serial AI agent runtime written in Go. Its core is a bounded
-action loop, not a collection of hard-coded workflows:
+OctoSucker is a serial AI agent runtime written in Go. It powers a personal
+desktop assistant through an asynchronous Task API while keeping the reasoning
+loop small and inspectable:
 
 ```text
-Planner -> Executor -> Evaluator -> Planner or Responder
+Planner -> Executor -> Step Evaluator -> Planner or Responder
 ```
 
-The runtime combines builtin tools, MCP servers, and typed executable providers
-in one validated tool catalog. Directory-based Agent Skills add procedural
-instructions through explicit activation. Domain behavior belongs in those
-extensions; the core loop does not know about individual websites, markets, or
-messaging services.
+The planner chooses one action at a time. Every tool call, request for user
+input, and direct model response becomes a user-visible Step. The runtime can
+pause for structured input or approval and then resume the same Task.
+
+## Current Capabilities
+
+- Serial, one-step planning with bounded retries and execution limits.
+- Separate planner, evaluator, and responder model configuration.
+- Role-specific context budgets and structured trajectory compaction.
+- Builtin, MCP, and typed executable tools in one schema-validated catalog.
+- Directory-based Agent Skills with explicit activation and on-demand resources.
+- Asynchronous Tasks with messages, Steps, status, result, and error state.
+- Structured forms when the agent needs missing information.
+- Explicit approval before high-risk tool execution.
+- Learned tool-routing recommendations without bypassing the planner.
+- Local HTTP and optional Telegram ingress.
+
+Task state is currently in memory. Restarting the process clears Tasks, but
+workspace SQLite data, learned routing data, Skills, knowledge, and logs remain
+on disk.
 
 ## Architecture
 
 | Path | Responsibility |
 | --- | --- |
-| `cmd/octosucker` | Process flags, config, runtime, and gateway wiring |
+| `cmd/octosucker` | Service entrypoint and lifecycle |
 | `config` | Workspace configuration and path resolution |
-| `internal/runtime/agentloop` | Generic serial turn controller and limits |
-| `internal/runtime/model` | Append-only turn, action, observation, and assessment state |
-| `internal/runtime/contextmanager` | Role-specific token budgets, selection, and trajectory compaction |
-| `internal/runtime/planning` | One structured action-or-respond decision |
-| `internal/runtime/execution` | Tool invocation and result normalization |
-| `internal/runtime/evaluation` | Goal progress and semantic action evaluation |
+| `internal/runtime/agentloop` | Serial turn controller and execution limits |
+| `internal/runtime/model` | Append-only turn, Step, observation, and assessment state |
+| `internal/runtime/contextmanager` | Role-specific context selection and compaction |
+| `internal/runtime/planning` | Structured action-or-respond decisions |
+| `internal/runtime/execution` | Tool invocation, approval, and result normalization |
+| `internal/runtime/evaluation` | Step usefulness and goal-progress evaluation |
 | `internal/runtime/responding` | Final user-facing synthesis |
-| `internal/runtime/conversation` | Bounded in-memory context by conversation id |
+| `internal/runtime/conversation` | Bounded assistant context |
 | `internal/runtime/toolrouting` | Conservative learned routing recommendations |
-| `internal/skills` | Agent Skill discovery, validation, and resource access |
-| `internal/toolcontract` | Tool DTOs and full JSON Schema validation |
-| `internal/tools` | Registry, builtin providers, MCP sessions, and typed executable adapters |
-| `internal/tools/opencli` | OpenCLI help introspection, generated schemas, and deterministic argv compilation |
+| `internal/task` | In-memory Task lifecycle and snapshots |
+| `internal/interaction` | Structured user-input forms |
+| `internal/skills` | Skill discovery, validation, activation, and resources |
+| `internal/toolcontract` | Tool DTOs, policies, and JSON Schema validation |
+| `internal/tools` | Builtin, MCP, OpenCLI, and executable providers |
 | `internal/storage` | Workspace SQLite persistence |
-| `internal/gateway` | Ingress assembly |
-| `internal/ingress` | Telegram and admin HTTP adapters |
+| `internal/gateway` | HTTP and Telegram ingress assembly |
+| `internal/ingress/adminhttp` | Task, compatibility chat, and graph HTTP routes |
 
-The detailed contracts are documented in
-[`internal/runtime/DESIGN.md`](internal/runtime/DESIGN.md).
-
-## Runtime Properties
-
-- One action is planned and executed at a time.
-- The planner receives exact tool ids, descriptions, risk metadata, and schemas.
-- Tool arguments are validated against full JSON Schema before invocation and
-  again at the registry boundary.
-- Structured model decisions use JSON response mode with validation retries.
-- Planner, evaluator, and responder use independently configured models.
-- Prompt context is budgeted by role; old steps are compacted as structured summaries rather than cut mid-output.
-- The execution trajectory is append-only; failed attempts remain visible.
-- Exact failed actions cannot be repeated in the same turn.
-- Tool success and user-goal success are evaluated separately.
-- Goal progress and routing-learning value are independent; useful prerequisite
-  actions can teach routing without prematurely completing the turn.
-- Final answers synthesize all useful observations.
-- Learned routing is advisory and never bypasses the planner.
-- Conversation context is separated by ingress-supplied conversation id.
-- Activated Skill instructions persist in the conversation independently of
-  bounded execution observations.
-- Observation provenance prevents untrusted tool output from becoming agent
-  instructions or leaking unrelated secrets.
+See [`internal/runtime/DESIGN.md`](internal/runtime/DESIGN.md) for the runtime
+contracts and loop invariants.
 
 ## Workspace
 
-`-workspace` points to an existing agent home containing resources such as:
+The service requires a workspace directory containing `config.json` and its
+agent-owned resources:
 
-- `config.json`
-- `skills/`
-- `knowledge/`
-- `data/`
-- `logs/`
+```text
+workspace/
+|-- config.json
+|-- skills/
+|-- knowledge/
+|-- data/
+`-- logs/
+```
 
-Each Skill is a directory with a required `SKILL.md` and optional supporting
-resources:
+Start from the checked-in example:
+
+```bash
+cp workspace/config.example.json workspace/config.json
+```
+
+At minimum, configure the OpenAI-compatible endpoint and the planner,
+evaluator, and responder models. To expose the desktop API, keep a local HTTP
+listener enabled:
+
+```json
+{
+  "http": {
+    "listen": "127.0.0.1:8090"
+  }
+}
+```
+
+Do not commit real API keys, `workspace/config.json`, SQLite files, or logs.
+
+## Run
+
+```bash
+go build -o octosucker ./cmd/octosucker
+./octosucker -workspace ./workspace
+```
+
+The process is a service. There is no terminal chat mode. With the example HTTP
+configuration, the API is available at `http://127.0.0.1:8090` and logs are
+written to `workspace/logs/agent.log`.
+
+## Task API
+
+Create a Task by submitting assistant input:
+
+```http
+POST /api/assistant/input
+Content-Type: application/json
+
+{
+  "content": "整理这批会议记录并生成摘要"
+}
+```
+
+The server returns `202 Accepted` with an initial Task snapshot:
+
+```json
+{
+  "action": "task_created",
+  "task": {
+    "id": "...",
+    "status": "running",
+    "version": 1,
+    "messages": [
+      {
+        "id": "...",
+        "role": "user",
+        "content": "整理这批会议记录并生成摘要",
+        "created_at": "..."
+      }
+    ],
+    "steps": []
+  }
+}
+```
+
+Read the latest snapshot with a low-frequency poll:
+
+```http
+GET /api/tasks/{taskID}
+```
+
+Task status is one of `running`, `waiting_input`, `waiting_approval`,
+`completed`, `failed`, or `cancelled`.
+
+When `pending_interaction` is present, submit its form values to the same Task:
+
+```http
+POST /api/tasks/{taskID}/interactions/{interactionID}
+Content-Type: application/json
+
+{
+  "values": {
+    "audience": "全体员工"
+  }
+}
+```
+
+Free-form input can also continue a Task that is in `waiting_input`:
+
+```json
+{
+  "active_task_id": "...",
+  "content": "通知对象是全体员工"
+}
+```
+
+If `active_task_id` identifies a terminal Task, the input creates a new child
+Task. Input is rejected while the active Task is still running or waiting for
+approval.
+
+Resolve a pending high-risk action explicitly:
+
+```http
+POST /api/tasks/{taskID}/approvals/{approvalID}
+Content-Type: application/json
+
+{
+  "decision": "approved"
+}
+```
+
+Use `rejected` to deny it. The runtime resumes the suspended execution after
+either decision.
+
+`POST /api/chat` remains available for synchronous integrations such as
+Telegram-style adapters. The desktop frontend should use the Task API because
+it exposes progress, interactions, and approvals.
+
+## Extension Model
+
+Use one of these boundaries for new capabilities:
+
+1. MCP for a structured external service.
+2. A typed provider that adapts an executable into schema-validated tools.
+3. A directory-based Agent Skill for procedural knowledge and workflow rules.
+
+A Skill is not an executable protocol. Stable integrations should not require
+the model to reconstruct a binary name, flags, or argv from prose. Keep
+`run_command` for genuinely ad hoc work.
+
+Each Skill is a directory with a required `SKILL.md` and optional resources:
 
 ```text
 skills/opencli/
@@ -81,55 +210,9 @@ skills/opencli/
     `-- authentication.md
 ```
 
-Only Skill name and description enter the default catalog. The complete
-`SKILL.md` is injected after `activate_skill`; supporting resources are read on
-demand with `read_skill_resource`.
-
-Secrets remain in local configuration or environment variables. Do not commit
-`workspace/config.json`, SQLite data, or logs.
-
-## Run
-
-```bash
-go build -o octosucker ./cmd/octosucker
-./octosucker -workspace /path/to/workspace
-```
-
-The admin HTTP endpoint accepts an optional conversation id for integrations
-that still use the synchronous chat endpoint:
-
-```json
-{
-  "conversation_id": "browser-main",
-  "message": "继续刚才的分析"
-}
-```
-
-If omitted, the local admin conversation id is `admin`.
-
-## Extension Model
-
-Use one of these boundaries for new capabilities:
-
-1. MCP provider for a structured service.
-2. A typed provider that deterministically adapts an executable into
-   schema-validated tools.
-3. A directory-based Agent Skill for procedural knowledge and workflow rules.
-
-Do not use a Skill document as an executable protocol. Stable integrations must
-not require the model to reconstruct a binary name, flags, or argv from prose.
-Keep `run_command` for genuinely ad hoc commands rather than as the interface to
-a maintained capability.
-
-The optional OpenCLI provider demonstrates the typed executable boundary. At
-startup it reads `opencli <site> --help -f yaml`, exposes only the configured
-allowlist, and always compiles structured arguments to JSON-producing commands.
-Configure it under `opencli.command`, `opencli.command_timeout_sec`, and
-`opencli.commands` in `config.json`.
-
-Do not add domain intent matching or domain-specific state transitions to the
-runtime loop. Stable business workflows should live in the external tool or be
-described by a Skill that composes already-structured tools.
+Only the Skill name and description enter the default catalog. Full
+instructions are injected after activation, and supporting resources are read
+on demand.
 
 ## Validation
 
