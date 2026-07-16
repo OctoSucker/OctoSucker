@@ -1,8 +1,13 @@
 # OctoSucker
 
-OctoSucker is a serial AI agent runtime written in Go. It powers a personal
-desktop assistant through an asynchronous Task API while keeping the reasoning
-loop small and inspectable:
+OctoSucker is a learning project for exploring how a practical personal AI
+assistant should be designed. It is not an attempt to reproduce every feature
+of a coding agent. The project focuses on a smaller question: how can an agent
+remain understandable, extensible, and useful to ordinary desktop users while
+it performs real work?
+
+The current answer is a serial Go runtime exposed through an asynchronous Task
+API, with a deliberately small and inspectable reasoning loop:
 
 ```text
 Planner -> Executor -> Step Evaluator -> Planner or Responder
@@ -11,6 +16,113 @@ Planner -> Executor -> Step Evaluator -> Planner or Responder
 The planner chooses one action at a time. Every tool call, request for user
 input, and direct model response becomes a user-visible Step. The runtime can
 pause for structured input or approval and then resume the same Task.
+
+## Design Principles
+
+### One assistant, many Tasks
+
+The user should experience one persistent digital assistant rather than a list
+of unrelated chat sessions. Internally, work is still divided into Tasks because
+execution needs clear lifecycle, failure, approval, and audit boundaries. A Task
+is therefore an execution unit, not the product's primary mental model.
+
+When a Task needs more information, the next input continues that Task. After a
+Task finishes, the next request creates a child Task while preserving assistant
+context. This keeps the interface continuous without pretending that unrelated
+work belongs to one execution.
+
+### Plan one step from current evidence
+
+OctoSucker does not ask the model to invent a complete execution graph before
+work begins. For open-ended office tasks, later actions often depend on tool
+results or information that the user has not supplied yet. A large up-front
+plan can look convincing while being based on assumptions.
+
+The planner instead chooses one next action from the current goal, context, and
+observations. After execution, an evaluator judges whether the result moved the
+goal forward, and the planner decides again:
+
+```text
+Goal + Context
+      |
+      v
+Plan one action -> Execute -> Evaluate usefulness and progress
+      ^                            |
+      |____________________________|
+                    |
+                    v
+          Respond or request input
+```
+
+This is intentionally serial. Parallel execution may improve throughput, but it
+also increases coordination cost and makes early behavior harder to understand.
+For a personal assistant still being validated, debuggability and predictable
+state transitions are more valuable than speculative concurrency.
+
+### Separate execution facts from goal completion
+
+A successful tool call only proves that the tool completed its contract. It
+does not prove that the user's goal has been achieved. OctoSucker treats the
+structured result returned by a builtin tool, MCP server, or typed provider as
+the execution fact; the evaluator then judges that result against the Step goal
+and the overall user goal.
+
+This avoids two opposite errors: declaring success merely because a command
+exited successfully, and repeatedly rechecking trusted tool results in an
+endless chain of verification. Tool correctness belongs at the tool boundary;
+goal-level judgment belongs in the agent loop.
+
+### Make reasoning inspectable without exposing hidden chain of thought
+
+The interface should show what the agent is doing, not private model reasoning.
+Every tool action, information request, and direct response becomes a concise
+Step with a title, status, summary, and evaluation. Failed attempts remain in
+the trajectory so later decisions and debugging are based on the actual run.
+
+The user sees operational progress and decisions rather than raw prompts or
+hidden reasoning traces.
+
+### Use structured interaction when the information is structured
+
+An empty chat box places the entire burden of describing a task on the user.
+That works well for people who already understand prompts, tools, and file
+paths, but it raises the barrier for ordinary office users.
+
+Natural language remains the entry point for open intent. Once the agent knows
+which specific fields are missing, it can return a structured form with labels,
+choices, validation, and defaults. High-risk actions similarly become explicit
+approval controls inside the normal conversation flow. The UI adapts to the
+current Task instead of forcing every interaction through prose.
+
+### Keep the runtime generic and capability boundaries deterministic
+
+The core loop should not contain special cases for individual websites,
+markets, messaging products, or office workflows. New capabilities enter
+through explicit boundaries:
+
+- MCP for structured external services.
+- Typed executable providers for deterministic command construction.
+- Agent Skills for procedural knowledge and workflow guidance.
+
+A Skill document can teach the model when and why to use a capability, but it
+should not force the model to reconstruct an executable protocol from prose.
+Stable commands, arguments, validation, and result shapes belong in MCP or a
+typed provider.
+
+### Learn conservatively
+
+Past execution can improve future tool routing, but learned recommendations are
+advisory. They may help the planner choose among capabilities; they must not
+bypass planning, schema validation, risk policy, or evaluation. This keeps
+learning useful without turning historical noise into hidden control flow.
+
+### Prefer explicit product boundaries over premature infrastructure
+
+OctoSucker currently favors a local, user-owned runtime, serial execution,
+low-frequency HTTP polling, and in-memory Task state. These are deliberate
+tradeoffs for a single-user learning project. Persistence, parallel execution,
+subagents, and streaming transports should be added when observed usage proves
+their value, not because mature agent products happen to contain them.
 
 ## Current Capabilities
 
