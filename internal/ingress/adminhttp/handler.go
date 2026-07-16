@@ -8,6 +8,7 @@ import (
 	"github.com/OctoSucker/octosucker/internal/ingress/adminhttp/chat"
 	"github.com/OctoSucker/octosucker/internal/ingress/adminhttp/graph"
 	"github.com/OctoSucker/octosucker/internal/ingress/adminhttp/root"
+	"github.com/OctoSucker/octosucker/internal/ingress/adminhttp/tasks"
 )
 
 // Handler builds the admin mux. RunChat is required; IndexHTML defaults to the embedded shell; Graph is optional.
@@ -25,6 +26,9 @@ func Handler(opts Options) (http.Handler, error) {
 	mux := http.NewServeMux()
 	root.Register(mux, index)
 	chat.Register(mux, opts.RunChat, opts.PlanInteraction)
+	if opts.SubmitAssistantInput != nil && opts.SubmitTaskInteraction != nil && opts.SubmitTaskApproval != nil && opts.GetTask != nil {
+		tasks.Register(mux, opts.SubmitAssistantInput, opts.SubmitTaskInteraction, opts.SubmitTaskApproval, opts.GetTask)
+	}
 	graph.Register(mux, opts.Graph)
 	return localCORSMiddleware(mux), nil
 }

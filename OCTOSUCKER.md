@@ -17,8 +17,7 @@ Runtime principles:
 Validation:
 
 - Run `go test ./...` from the repository root after runtime changes.
-- For CLI smoke tests, prefer one-shot mode:
-  `octosucker -workspace /Users/zecrey/Desktop/OctoSucker/OctoSucker/workspace -message "列出当前可用技能"`
+- Run interaction smoke tests through the Task HTTP API or the Web UI.
 
 Safety:
 

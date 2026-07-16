@@ -148,7 +148,7 @@ full trajectory, so multi-step answers never degrade to the last tool output.
 
 Keeps bounded process-local dialogue history by an ingress-supplied conversation
 id. It also retains trusted active context artifacts for the conversation.
-HTTP, stdin, and each Telegram chat use separate ids. Persistence is outside the
+HTTP and each Telegram chat use separate ids. Persistence is outside the
 current scope.
 
 ### `skills`

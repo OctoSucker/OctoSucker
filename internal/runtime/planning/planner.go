@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/OctoSucker/octosucker/internal/runtime/contextmanager"
 	"github.com/OctoSucker/octosucker/internal/runtime/model"
@@ -42,6 +43,10 @@ type decisionJSON struct {
 	Tool        string         `json:"tool"`
 	Arguments   map[string]any `json:"arguments"`
 	Reason      string         `json:"reason"`
+	Step        struct {
+		Title   string `json:"title"`
+		Summary string `json:"summary"`
+	} `json:"step"`
 }
 
 func (p *Planner) Decide(ctx context.Context, turn *model.Turn) (model.Decision, error) {
@@ -86,6 +91,7 @@ func (p *Planner) Decide(ctx context.Context, turn *model.Turn) (model.Decision,
 func (p *Planner) validateDecision(raw decisionJSON, turn *model.Turn, descriptors []toolcontract.ToolDescriptor) (model.Decision, error) {
 	kind := model.DecisionKind(strings.ToLower(strings.TrimSpace(raw.Kind)))
 	reason := strings.TrimSpace(raw.Reason)
+	step := model.DecisionStep{Title: clipText(raw.Step.Title, 100), Summary: clipText(raw.Step.Summary, 220)}
 	switch kind {
 	case model.DecisionRespond:
 		disposition := model.ResponseDisposition(strings.ToLower(strings.TrimSpace(raw.Disposition)))
@@ -97,7 +103,13 @@ func (p *Planner) validateDecision(raw decisionJSON, turn *model.Turn, descripto
 		if reason == "" {
 			reason = "No further tool action is needed."
 		}
-		return model.Decision{Kind: model.DecisionRespond, Disposition: disposition, Reason: reason}, nil
+		if step.Title == "" {
+			step.Title = defaultRespondStepTitle(disposition)
+		}
+		if containsHan(turn.Goal) && !containsHan(step.Title) {
+			return model.Decision{}, fmt.Errorf("planner: step title must use the user's Chinese language")
+		}
+		return model.Decision{Kind: model.DecisionRespond, Disposition: disposition, Step: step, Reason: reason}, nil
 
 	case model.DecisionAct:
 		toolID := strings.TrimSpace(raw.Tool)
@@ -126,13 +138,47 @@ func (p *Planner) validateDecision(raw decisionJSON, turn *model.Turn, descripto
 			return model.Decision{}, fmt.Errorf("planner: act decision requires a concrete goal")
 		}
 		action := model.Action{ID: uuid.NewString(), Goal: goal, Tool: toolID, Arguments: args}
+		if step.Title == "" {
+			step.Title = goal
+		}
+		if containsHan(turn.Goal) && !containsHan(step.Title) {
+			return model.Decision{}, fmt.Errorf("planner: step title must use the user's Chinese language")
+		}
 		if turn.HasFailedAction(action) {
 			encoded, _ := json.Marshal(args)
 			return model.Decision{}, fmt.Errorf("planner: exact failed action cannot be repeated: tool=%s arguments=%s", toolID, encoded)
 		}
-		return model.Decision{Kind: model.DecisionAct, Action: action, Reason: reason}, nil
+		return model.Decision{Kind: model.DecisionAct, Action: action, Step: step, Reason: reason}, nil
 
 	default:
 		return model.Decision{}, fmt.Errorf("planner: unknown decision kind %q (want act or respond)", raw.Kind)
 	}
+}
+
+func containsHan(value string) bool {
+	for _, r := range value {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultRespondStepTitle(disposition model.ResponseDisposition) string {
+	switch disposition {
+	case model.ResponseClarify:
+		return "收集任务所需信息"
+	case model.ResponseBlocked:
+		return "检查任务可执行性"
+	default:
+		return "整理并生成任务结果"
+	}
+}
+
+func clipText(value string, limit int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) <= limit {
+		return string(runes)
+	}
+	return string(runes[:limit])
 }

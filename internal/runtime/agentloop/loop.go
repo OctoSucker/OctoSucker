@@ -44,21 +44,25 @@ func (l *Loop) Run(ctx context.Context, turn *model.Turn) error {
 		turn.AppendTrace("planner decision=%s tool=%s goal=%s reason=%s", decision.Kind, decision.Action.Tool, decision.Action.Goal, decision.Reason)
 
 		if decision.Kind == model.DecisionRespond {
-			return l.finish(ctx, turn, decision.Reason, decision.Disposition)
+			return l.finish(ctx, turn, decision.Reason, decision.Disposition, decision.Step)
 		}
 		if decision.Kind != model.DecisionAct {
 			return fmt.Errorf("agent loop: unsupported decision %q", decision.Kind)
 		}
 
 		actionCount++
+		step := turn.BeginStep(decision.Action)
+		step.Title = decision.Step.Title
+		step.Summary = decision.Step.Summary
+		turn.NotifyStep(step)
 		observation := l.executor.Execute(ctx, decision.Action)
+		step.Observation = observation
 		if observation.Result.Err == nil {
 			if err := turn.ApplyContextArtifacts(observation.Result.Artifacts); err != nil {
 				observation.Result.Err = fmt.Errorf("agent loop: apply tool context: %w", err)
 				observation.Result = observation.Result.WithInferredMeta(decision.Action.Tool)
 			}
 		}
-		step := turn.AppendStep(decision.Action, observation)
 		turn.AppendTrace("tool observed tool=%s kind=%s count=%d empty=%v error=%v",
 			decision.Action.Tool,
 			observation.Result.Kind,
@@ -69,6 +73,7 @@ func (l *Loop) Run(ctx context.Context, turn *model.Turn) error {
 
 		if observation.Result.Err != nil {
 			step.Assessment = classifyToolFailure(observation.Result.Err)
+			turn.CompleteStep(step, observation.Result.Err)
 			turn.ConsecutiveFailures++
 			l.learn(turn, step)
 			if step.Assessment.Progress == model.ProgressBlocked || turn.ConsecutiveFailures >= maxConsecutiveFailures {
@@ -93,6 +98,7 @@ func (l *Loop) Run(ctx context.Context, turn *model.Turn) error {
 			}
 		}
 		step.Assessment = assessment
+		turn.CompleteStep(step, nil)
 		turn.AppendTrace("evaluation progress=%s routing_outcome=%s routing_reason=%s summary=%s", assessment.Progress, assessment.RoutingOutcome, assessment.RoutingReason, assessment.Summary)
 		l.learn(turn, step)
 
@@ -119,11 +125,28 @@ func (l *Loop) Run(ctx context.Context, turn *model.Turn) error {
 	return l.finish(ctx, turn, fmt.Sprintf("Stopped after reaching the action limit (%d).", maxActions), model.ResponseBlocked)
 }
 
-func (l *Loop) finish(ctx context.Context, turn *model.Turn, reason string, disposition model.ResponseDisposition) error {
+func (l *Loop) finish(ctx context.Context, turn *model.Turn, reason string, disposition model.ResponseDisposition, descriptions ...model.DecisionStep) error {
+	description := model.DecisionStep{}
+	if len(descriptions) > 0 {
+		description = descriptions[0]
+	}
+	if strings.TrimSpace(description.Title) == "" {
+		switch disposition {
+		case model.ResponseClarify:
+			description.Title = "收集任务所需信息"
+		case model.ResponseBlocked:
+			description.Title = "检查任务可执行性"
+		default:
+			description.Title = "整理并生成任务结果"
+		}
+	}
 	answer, err := l.responder.Respond(ctx, turn, reason, disposition)
 	if err != nil {
+		step := turn.BeginResponseStep(description, disposition)
+		turn.FinishResponseStep(step, disposition, err)
 		return fmt.Errorf("agent loop: respond: %w", err)
 	}
+	step := turn.BeginResponseStep(description, disposition)
 	switch disposition {
 	case model.ResponseBlocked:
 		turn.Block(answer, reason)
@@ -132,6 +155,7 @@ func (l *Loop) finish(ctx context.Context, turn *model.Turn, reason string, disp
 	default:
 		turn.Complete(answer, reason)
 	}
+	turn.FinishResponseStep(step, disposition, nil)
 	turn.AppendTrace("turn finished status=%s reason=%s", turn.Status, reason)
 	return nil
 }
@@ -163,6 +187,7 @@ func classifyToolFailure(err error) model.Assessment {
 		"not on path",
 		"executable is not available",
 		"permission denied",
+		"rejected by user",
 		"operation not permitted",
 		"missing required environment",
 		"unauthorized",

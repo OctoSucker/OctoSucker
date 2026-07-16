@@ -34,7 +34,7 @@ messaging services.
 | `internal/tools/opencli` | OpenCLI help introspection, generated schemas, and deterministic argv compilation |
 | `internal/storage` | Workspace SQLite persistence |
 | `internal/gateway` | Ingress assembly |
-| `internal/ingress` | stdin, Telegram, and admin HTTP adapters |
+| `internal/ingress` | Telegram and admin HTTP adapters |
 
 The detailed contracts are documented in
 [`internal/runtime/DESIGN.md`](internal/runtime/DESIGN.md).
@@ -95,13 +95,8 @@ go build -o octosucker ./cmd/octosucker
 ./octosucker -workspace /path/to/workspace
 ```
 
-One-shot mode:
-
-```bash
-./octosucker -workspace /path/to/workspace -message "列出当前可用技能"
-```
-
-The admin HTTP endpoint accepts an optional conversation id:
+The admin HTTP endpoint accepts an optional conversation id for integrations
+that still use the synchronous chat endpoint:
 
 ```json
 {

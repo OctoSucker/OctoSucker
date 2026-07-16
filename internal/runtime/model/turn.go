@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/OctoSucker/octosucker/internal/toolcontract"
 )
@@ -33,7 +34,13 @@ type Decision struct {
 	Kind        DecisionKind        `json:"kind"`
 	Disposition ResponseDisposition `json:"disposition,omitempty"`
 	Action      Action              `json:"action,omitempty"`
+	Step        DecisionStep        `json:"step,omitempty"`
 	Reason      string              `json:"reason,omitempty"`
+}
+
+type DecisionStep struct {
+	Title   string `json:"title"`
+	Summary string `json:"summary,omitempty"`
 }
 
 type ResponseDisposition string
@@ -106,9 +113,15 @@ type Assessment struct {
 }
 
 type Step struct {
+	Kind        string      `json:"kind"`
+	Title       string      `json:"title"`
+	Summary     string      `json:"summary,omitempty"`
 	Action      Action      `json:"action"`
 	Observation Observation `json:"observation"`
 	Assessment  Assessment  `json:"assessment"`
+	Status      string      `json:"status,omitempty"`
+	StartedAt   time.Time   `json:"started_at,omitempty"`
+	CompletedAt *time.Time  `json:"completed_at,omitempty"`
 }
 
 // Turn is the aggregate for one user request. Steps are append-only: a new
@@ -125,6 +138,7 @@ type Turn struct {
 	Answer              string
 	ConsecutiveFailures int
 	Trace               []string
+	OnStepChanged       func(*Step)
 }
 
 func NewTurn(id, conversationID, goal string, context []Message, artifacts ...[]toolcontract.ContextArtifact) *Turn {
@@ -207,9 +221,74 @@ func (t *Turn) ContextArtifactsSnapshot() []toolcontract.ContextArtifact {
 }
 
 func (t *Turn) AppendStep(action Action, observation Observation) *Step {
-	step := &Step{Action: action, Observation: observation}
-	t.Steps = append(t.Steps, step)
+	step := t.BeginStep(action)
+	step.Observation = observation
+	t.CompleteStep(step, observation.Result.Err)
 	return step
+}
+
+func (t *Turn) BeginStep(action Action) *Step {
+	step := &Step{Kind: "tool", Title: strings.TrimSpace(action.Goal), Action: action, Status: "running", StartedAt: time.Now().UTC()}
+	t.Steps = append(t.Steps, step)
+	t.notifyStep(step)
+	return step
+}
+
+func (t *Turn) BeginResponseStep(description DecisionStep, disposition ResponseDisposition) *Step {
+	kind := "response"
+	if disposition == ResponseClarify {
+		kind = "interaction"
+	}
+	step := &Step{
+		Kind:      kind,
+		Title:     strings.TrimSpace(description.Title),
+		Summary:   strings.TrimSpace(description.Summary),
+		Status:    "running",
+		StartedAt: time.Now().UTC(),
+	}
+	t.Steps = append(t.Steps, step)
+	t.notifyStep(step)
+	return step
+}
+
+func (t *Turn) FinishResponseStep(step *Step, disposition ResponseDisposition, err error) {
+	if t == nil || step == nil {
+		return
+	}
+	if err != nil || disposition == ResponseBlocked {
+		t.CompleteStep(step, fmt.Errorf("response blocked"))
+		return
+	}
+	if disposition == ResponseClarify {
+		step.Status = "waiting_input"
+		t.notifyStep(step)
+		return
+	}
+	t.CompleteStep(step, nil)
+}
+
+func (t *Turn) CompleteStep(step *Step, err error) {
+	if t == nil || step == nil {
+		return
+	}
+	completedAt := time.Now().UTC()
+	step.CompletedAt = &completedAt
+	if err != nil {
+		step.Status = "failed"
+	} else {
+		step.Status = "completed"
+	}
+	t.notifyStep(step)
+}
+
+func (t *Turn) NotifyStep(step *Step) {
+	t.notifyStep(step)
+}
+
+func (t *Turn) notifyStep(step *Step) {
+	if t != nil && t.OnStepChanged != nil && step != nil {
+		t.OnStepChanged(step)
+	}
 }
 
 func (t *Turn) LastStep() *Step {

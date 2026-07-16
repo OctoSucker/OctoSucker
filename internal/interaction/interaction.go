@@ -229,6 +229,9 @@ func cleanOptions(values []string) []string {
 }
 
 func numberedQuestionForm(text string) *Interaction {
+	if !requestsUserInput(text) {
+		return nil
+	}
 	matches := numberedQuestionRE.FindAllStringSubmatch(text, -1)
 	if len(matches) < 2 || len(matches) > 8 {
 		return nil
@@ -260,6 +263,19 @@ func numberedQuestionForm(text string) *Interaction {
 		return nil
 	}
 	return form
+}
+
+func requestsUserInput(text string) bool {
+	lower := strings.ToLower(text)
+	for _, marker := range []string{
+		"请提供", "请补充", "请填写", "请回答", "请告诉", "需要您提供", "需要你提供",
+		"please provide", "please answer", "please fill", "tell me", "need you to provide",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return strings.Contains(text, "？") || strings.Contains(text, "?")
 }
 
 func RenderResponse(resp Response, form *Interaction) string {

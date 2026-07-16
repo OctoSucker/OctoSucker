@@ -24,6 +24,8 @@ import (
 	"github.com/OctoSucker/octosucker/internal/runtime/responding"
 	"github.com/OctoSucker/octosucker/internal/runtime/toolrouting"
 	"github.com/OctoSucker/octosucker/internal/storage"
+	"github.com/OctoSucker/octosucker/internal/task"
+	"github.com/OctoSucker/octosucker/internal/toolcontract"
 	"github.com/OctoSucker/octosucker/internal/tools"
 	"github.com/OctoSucker/octosucker/pkg/llmclient"
 	"github.com/google/uuid"
@@ -37,7 +39,11 @@ type Runtime struct {
 	conversations *conversation.Store
 	interactions  *interaction.Planner
 	data          *storage.DB
+	tasks         *task.Store
+	ctx           context.Context
 	turnMu        sync.Mutex
+	approvalMu    sync.Mutex
+	approvals     map[string]chan bool
 }
 
 func NewRuntime(ctx context.Context, workspaceRoot string, cfg *config.Workspace) (*Runtime, error) {
@@ -118,6 +124,9 @@ func NewRuntime(ctx context.Context, workspaceRoot string, cfg *config.Workspace
 		conversations: conversation.NewStore(),
 		interactions:  interactionPlanner,
 		data:          data,
+		tasks:         task.NewStore(),
+		ctx:           ctx,
+		approvals:     make(map[string]chan bool),
 	}, nil
 }
 
@@ -179,6 +188,208 @@ func (r *Runtime) RunTurn(ctx context.Context, conversationID, text string) ([]s
 		log.Printf("run_trace: turn=%s\n%s", turn.ID, trace)
 	}
 	return turn.UserFacingMessages()
+}
+
+// SubmitAssistantInput creates a new task or resumes the active task when it
+// is explicitly waiting for user input. Execution continues asynchronously.
+func (r *Runtime) SubmitAssistantInput(activeTaskID, text string) (task.InputResult, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return task.InputResult{}, fmt.Errorf("runtime: empty user input")
+	}
+
+	activeTaskID = strings.TrimSpace(activeTaskID)
+	if activeTaskID != "" {
+		active, ok := r.tasks.Get(activeTaskID)
+		if !ok {
+			return task.InputResult{}, fmt.Errorf("task not found")
+		}
+		switch active.Status {
+		case task.StatusWaitingInput:
+			updated, err := r.tasks.PrepareInput(activeTaskID, text)
+			if err != nil {
+				return task.InputResult{}, err
+			}
+			go r.runTask(activeTaskID, text)
+			return task.InputResult{Action: "task_continued", Task: updated}, nil
+		case task.StatusRunning:
+			return task.InputResult{}, fmt.Errorf("task is still running")
+		case task.StatusWaitingApproval:
+			return task.InputResult{}, fmt.Errorf("task is waiting for approval")
+		}
+	}
+
+	created := r.tasks.Create(text, activeTaskID)
+	go r.runTask(created.ID, text)
+	return task.InputResult{Action: "task_created", Task: created}, nil
+}
+
+func (r *Runtime) SubmitInteraction(taskID, interactionID string, values map[string]any) (task.InputResult, error) {
+	current, ok := r.tasks.Get(taskID)
+	if !ok {
+		return task.InputResult{}, fmt.Errorf("task not found")
+	}
+	if current.Status != task.StatusWaitingInput || current.PendingInteraction == nil {
+		return task.InputResult{}, fmt.Errorf("task is not waiting for structured input")
+	}
+	if strings.TrimSpace(interactionID) != current.PendingInteraction.ID {
+		return task.InputResult{}, fmt.Errorf("interaction does not match the pending task interaction")
+	}
+	message := interaction.RenderResponse(interaction.Response{Values: values}, current.PendingInteraction)
+	return r.SubmitAssistantInput(taskID, message)
+}
+
+func (r *Runtime) Task(taskID string) (task.Snapshot, bool) {
+	return r.tasks.Get(taskID)
+}
+
+func (r *Runtime) SubmitApproval(taskID, approvalID, decision string) (task.Snapshot, error) {
+	decision = strings.TrimSpace(strings.ToLower(decision))
+	updated, err := r.tasks.ResolveApproval(taskID, approvalID, decision)
+	if err != nil {
+		return task.Snapshot{}, err
+	}
+	r.approvalMu.Lock()
+	waiter, ok := r.approvals[approvalID]
+	if ok {
+		delete(r.approvals, approvalID)
+	}
+	r.approvalMu.Unlock()
+	if !ok {
+		return task.Snapshot{}, fmt.Errorf("approval waiter not found")
+	}
+	waiter <- decision == "approved"
+	close(waiter)
+	return updated, nil
+}
+
+func (r *Runtime) runTask(taskID, text string) {
+	ctx := r.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !r.turnMu.TryLock() {
+		r.tasks.Finish(taskID, task.StatusFailed, []string{MsgBusy}, nil, "", MsgBusy)
+		return
+	}
+	defer r.turnMu.Unlock()
+	ctx = execution.WithApprovalHandler(ctx, func(ctx context.Context, action model.Action, policy toolcontract.Policy) error {
+		approvalID := uuid.NewString()
+		waiter := make(chan bool, 1)
+		r.approvalMu.Lock()
+		r.approvals[approvalID] = waiter
+		r.approvalMu.Unlock()
+		title := strings.TrimSpace(action.Goal)
+		if title == "" {
+			title = "执行高风险工具：" + action.Tool
+		}
+		if err := r.tasks.RequireApproval(taskID, task.Approval{
+			ID:          approvalID,
+			Title:       title,
+			Description: strings.TrimSpace(policy.Summary),
+		}); err != nil {
+			return err
+		}
+		select {
+		case approved := <-waiter:
+			if !approved {
+				return fmt.Errorf("rejected by user")
+			}
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+
+	turn := model.NewTurn(
+		uuid.NewString(),
+		"assistant",
+		text,
+		r.conversations.Context("assistant"),
+		r.conversations.ContextArtifacts("assistant"),
+	)
+	turn.OnStepChanged = func(step *model.Step) {
+		r.tasks.UpdateStep(taskID, taskStep(turn, step))
+	}
+	if err := r.loop.Run(ctx, turn); err != nil {
+		log.Printf("runtime task: task=%s turn=%s error=%v", taskID, turn.ID, err)
+		friendly := friendlyRunError(err)
+		r.tasks.Finish(taskID, task.StatusFailed, []string{friendly}, nil, "", friendly)
+		return
+	}
+
+	r.conversations.RememberContextArtifacts("assistant", turn.ContextArtifactsSnapshot())
+	r.conversations.AppendExchange("assistant", text, turn.Answer)
+	messages, err := turn.UserFacingMessages()
+	if err != nil {
+		friendly := friendlyRunError(err)
+		r.tasks.Finish(taskID, task.StatusFailed, []string{friendly}, nil, "", friendly)
+		return
+	}
+	form, _ := r.PlanInteraction(ctx, messages)
+	status := task.StatusCompleted
+	if turn.Status == model.TurnAwaitingInput || form != nil {
+		status = task.StatusWaitingInput
+	} else if turn.Status == model.TurnBlocked {
+		status = task.StatusFailed
+	}
+	resultSummary := turn.Answer
+	if status != task.StatusCompleted {
+		resultSummary = ""
+	}
+	r.tasks.Finish(taskID, status, messages, form, resultSummary, "")
+	log.Printf("runtime task: task=%s turn=%s status=%s steps=%d", taskID, turn.ID, status, len(turn.Steps))
+}
+
+func taskStep(turn *model.Turn, step *model.Step) task.Step {
+	if turn == nil || step == nil {
+		return task.Step{}
+	}
+	stepIndex := 0
+	for i, candidate := range turn.Steps {
+		if candidate == step {
+			stepIndex = i + 1
+			break
+		}
+	}
+	id := fmt.Sprintf("%s:%d", turn.ID, stepIndex)
+	summary := strings.TrimSpace(step.Summary)
+	if summary == "" {
+		summary = strings.TrimSpace(step.Assessment.Summary)
+	}
+	if summary == "" && step.Status != "running" {
+		summary = clipTaskText(step.Observation.Result.CompactText(), 220)
+	}
+	summary = clipTaskText(summary, 180)
+	out := task.Step{
+		ID:          id,
+		Kind:        strings.TrimSpace(step.Kind),
+		Title:       strings.TrimSpace(step.Title),
+		Tool:        strings.TrimSpace(step.Action.Tool),
+		Status:      step.Status,
+		Summary:     summary,
+		Evaluation:  strings.TrimSpace(step.Assessment.Summary),
+		StartedAt:   step.StartedAt,
+		CompletedAt: step.CompletedAt,
+	}
+	if out.Title == "" {
+		out.Title = strings.TrimSpace(step.Action.Goal)
+	}
+	if out.Title == "" {
+		out.Title = out.Tool
+	}
+	if step.CompletedAt != nil && !step.StartedAt.IsZero() {
+		out.DurationMS = step.CompletedAt.Sub(step.StartedAt).Milliseconds()
+	}
+	return out
+}
+
+func clipTaskText(value string, maxRunes int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 func friendlyRunError(err error) string {

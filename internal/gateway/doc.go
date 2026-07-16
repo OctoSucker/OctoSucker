@@ -1,4 +1,3 @@
-// Package gateway reads [config.Workspace] (HTTP listen, Telegram) plus CLI [Options], then wires an
-// [Agent] (internal/runtime.Runtime) into the peer ingress adapters under internal/ingress (adminhttp,
-// telegram, stdin). No planner or tool logic, only orchestration and shutdown.
+// Package gateway reads [config.Workspace] and wires an [Agent] into the HTTP
+// and Telegram ingress adapters. It owns orchestration and shutdown only.
 package gateway

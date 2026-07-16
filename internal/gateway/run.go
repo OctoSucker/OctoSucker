@@ -11,19 +11,12 @@ import (
 	"time"
 
 	"github.com/OctoSucker/octosucker/config"
-	"github.com/OctoSucker/octosucker/internal/ingress/stdin"
 	"github.com/OctoSucker/octosucker/internal/ingress/telegram"
 )
 
-// Options are process flags not in config.json (stdin REPL, REPL log-path hint).
-type Options struct {
-	EnableCmd    bool
-	AgentLogPath string
-}
-
-// Run requires at least one of cfg.http.listen, cfg.telegram (valid token), or opt.EnableCmd.
+// Run requires at least one configured service ingress.
 // It starts the corresponding transports, then blocks until ctx is canceled.
-func Run(ctx context.Context, agent Agent, cfg *config.Workspace, opt Options) error {
+func Run(ctx context.Context, agent Agent, cfg *config.Workspace) error {
 	if cfg == nil {
 		return fmt.Errorf("gateway: workspace config required")
 	}
@@ -38,8 +31,8 @@ func Run(ctx context.Context, agent Agent, cfg *config.Workspace, opt Options) e
 		}
 	}
 
-	if tg == nil && !opt.EnableCmd && adminListen == "" {
-		return fmt.Errorf("need telegram bot_token, local cmd (-cmd=true), or http.listen (admin web) in config.json")
+	if tg == nil && adminListen == "" {
+		return fmt.Errorf("need telegram bot_token or http.listen in config.json")
 	}
 
 	var adminSrv *http.Server
@@ -66,17 +59,6 @@ func Run(ctx context.Context, agent Agent, cfg *config.Workspace, opt Options) e
 			log.Printf("admin web shutdown: %v", err)
 		}
 	}()
-
-	if opt.EnableCmd {
-		go func() {
-			err := stdin.Run(ctx, func(ctx context.Context, text string) ([]string, error) {
-				return agent.RunTurn(ctx, "stdin", text)
-			}, opt.AgentLogPath)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				log.Printf("stdin chat: %v", err)
-			}
-		}()
-	}
 
 	if tg != nil {
 		go func() {
