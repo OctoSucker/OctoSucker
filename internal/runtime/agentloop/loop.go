@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/OctoSucker/octosucker/internal/runtime/model"
+	"github.com/OctoSucker/octosucker/internal/toolcontract"
 )
 
 const (
@@ -98,6 +99,13 @@ func (l *Loop) Run(ctx context.Context, turn *model.Turn) error {
 			}
 		}
 		step.Assessment = assessment
+		if assessment.Progress == model.ProgressComplete && !turn.PlanCanComplete(step.Action.PlanStepID, assessment.CriteriaSatisfied) {
+			assessment.Progress = model.ProgressContinue
+			assessment.RoutingReason = model.RoutingReasonNecessaryPrerequisite
+			assessment.Summary = "The current step met its success criteria, but the explicit plan still has incomplete steps."
+			assessment.NextStepHint = "Continue with the next incomplete plan step."
+			step.Assessment = assessment
+		}
 		turn.CompleteStep(step, nil)
 		turn.AppendTrace("evaluation progress=%s routing_outcome=%s routing_reason=%s summary=%s", assessment.Progress, assessment.RoutingOutcome, assessment.RoutingReason, assessment.Summary)
 		l.learn(turn, step)
@@ -176,6 +184,24 @@ func (l *Loop) learn(turn *model.Turn, step *model.Step) {
 func classifyToolFailure(err error) model.Assessment {
 	summary := "The tool action failed: " + strings.TrimSpace(err.Error())
 	progress := model.ProgressContinue
+	if kind, ok := toolcontract.FailureKindOf(err); ok {
+		switch kind {
+		case toolcontract.FailureRetryable:
+			progress = model.ProgressContinue
+		case toolcontract.FailurePermanent,
+			toolcontract.FailureApprovalRequired,
+			toolcontract.FailureApprovalRejected,
+			toolcontract.FailureUserActionRequired:
+			progress = model.ProgressBlocked
+		}
+		return model.Assessment{
+			Progress:       progress,
+			RoutingOutcome: model.RoutingNoSignal,
+			RoutingReason:  model.RoutingReasonTechnicalError,
+			Summary:        summary,
+			NextStepHint:   "Resolve the execution requirement before selecting another tool.",
+		}
+	}
 	for _, marker := range []string{
 		"unknown tool",
 		"forbidden by blacklist",
@@ -202,7 +228,7 @@ func classifyToolFailure(err error) model.Assessment {
 	}
 	return model.Assessment{
 		Progress:       progress,
-		RoutingOutcome: model.RoutingWrongRoute,
+		RoutingOutcome: model.RoutingNoSignal,
 		RoutingReason:  model.RoutingReasonTechnicalError,
 		Summary:        summary,
 		NextStepHint:   "Choose a materially different action only when the failure is recoverable.",

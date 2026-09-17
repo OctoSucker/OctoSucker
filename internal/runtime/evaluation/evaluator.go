@@ -34,11 +34,13 @@ func New(llm JSONCompleter, contexts *contextmanager.Manager, projectCtx string)
 }
 
 type assessmentJSON struct {
-	Progress       string `json:"progress"`
-	RoutingOutcome string `json:"routing_outcome"`
-	RoutingReason  string `json:"routing_reason"`
-	Summary        string `json:"summary"`
-	NextStepHint   string `json:"next_step_hint"`
+	Progress          string `json:"progress"`
+	RoutingOutcome    string `json:"routing_outcome"`
+	RoutingReason     string `json:"routing_reason"`
+	Summary           string `json:"summary"`
+	Evidence          string `json:"evidence"`
+	CriteriaSatisfied bool   `json:"criteria_satisfied"`
+	NextStepHint      string `json:"next_step_hint"`
 }
 
 func (e *Evaluator) Evaluate(ctx context.Context, turn *model.Turn) (model.Assessment, error) {
@@ -103,11 +105,28 @@ func normalizeAssessment(raw assessmentJSON) (model.Assessment, error) {
 	if summary == "" {
 		return model.Assessment{}, fmt.Errorf("evaluator: summary is required")
 	}
+	evidence := strings.TrimSpace(raw.Evidence)
+	if raw.CriteriaSatisfied && evidence == "" {
+		return model.Assessment{}, fmt.Errorf("evaluator: satisfied success criteria requires evidence")
+	}
+	if progress == model.ProgressComplete {
+		if routingReason != model.RoutingReasonGoalSatisfied {
+			return model.Assessment{}, fmt.Errorf("evaluator: complete progress requires routing_reason goal_satisfied")
+		}
+		if evidence == "" {
+			return model.Assessment{}, fmt.Errorf("evaluator: complete progress requires evidence")
+		}
+		if !raw.CriteriaSatisfied {
+			return model.Assessment{}, fmt.Errorf("evaluator: complete progress requires satisfied success criteria")
+		}
+	}
 	return model.Assessment{
-		Progress:       progress,
-		RoutingOutcome: routingOutcome,
-		RoutingReason:  routingReason,
-		Summary:        summary,
-		NextStepHint:   strings.TrimSpace(raw.NextStepHint),
+		Progress:          progress,
+		RoutingOutcome:    routingOutcome,
+		RoutingReason:     routingReason,
+		Summary:           summary,
+		Evidence:          evidence,
+		CriteriaSatisfied: raw.CriteriaSatisfied,
+		NextStepHint:      strings.TrimSpace(raw.NextStepHint),
 	}, nil
 }

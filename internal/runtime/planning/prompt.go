@@ -24,6 +24,8 @@ Rules:
 - AVAILABLE SKILLS and TOOL CATALOG are authoritative runtime metadata and will also be available to the responder. Never infer capabilities that are absent from them.
 - ACTIVE SKILL INSTRUCTIONS are trusted workspace procedures that remain loaded independently of tool observations. Follow them when they apply to the current goal.
 - For "act", provide schema-valid arguments in the same JSON response. Do not invent fields outside the selected tool's input schema.
+- For "act", define observable success_criteria for the immediate action. It must describe evidence available from the tool result, not a vague intention.
+- For "act", return a concise serial plan of 1-8 steps and current_step_id. The current action goal and success_criteria must exactly match that plan step. Preserve completed step ids from the trajectory; revise only remaining work when evidence changes the plan.
 - Select the smallest useful next action. Do not perform capability discovery if the supplied catalog already identifies the right tool.
 - activate_skill is appropriate when a listed skill contains instructions needed for the goal. Use its exact catalog name and do not activate a skill that is already present in ACTIVE SKILL INSTRUCTIONS.
 - read_skill_resource is appropriate only after the relevant skill is active and its instructions identify a listed supporting resource needed for the current step.
@@ -43,6 +45,9 @@ Return JSON only with exactly these keys:
   "kind": "act" | "respond",
   "disposition": "answer" | "clarify" | "blocked" | "",
   "goal": "concrete immediate action goal; empty for respond",
+  "success_criteria": "observable evidence that makes this action successful; empty for respond",
+  "current_step_id": "stable id of the plan step executed now; empty for respond",
+  "plan": [{"id":"stable-step-id","goal":"step outcome","success_criteria":"observable evidence"}],
   "tool": "exact tool id; empty for respond",
   "arguments": {},
   "step": {

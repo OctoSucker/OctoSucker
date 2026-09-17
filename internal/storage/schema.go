@@ -6,4 +6,5 @@ const (
 	TableRoutingTransitions  = "routing_transitions" // append-only recent (intent, from→to, outcome) for tool routing; pruned to cap
 	TableKnowledgeGraphNodes = "kg_nodes"
 	TableKnowledgeGraphEdges = "kg_edges"
+	TableTaskSnapshots       = "task_snapshots"
 )

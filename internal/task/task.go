@@ -2,7 +2,9 @@
 package task
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +61,20 @@ type Result struct {
 	Summary string `json:"summary"`
 }
 
+type PlanStep struct {
+	ID              string `json:"id"`
+	Goal            string `json:"goal"`
+	SuccessCriteria string `json:"success_criteria"`
+	Status          string `json:"status"`
+	Evidence        string `json:"evidence,omitempty"`
+}
+
+type Plan struct {
+	Objective string     `json:"objective"`
+	Revision  int        `json:"revision"`
+	Steps     []PlanStep `json:"steps"`
+}
+
 type InputResult struct {
 	Action string   `json:"action"`
 	Task   Snapshot `json:"task"`
@@ -68,12 +84,14 @@ type Snapshot struct {
 	ID                 string                   `json:"id"`
 	ParentTaskID       string                   `json:"parent_task_id,omitempty"`
 	Title              string                   `json:"title"`
+	Objective          string                   `json:"objective"`
 	Status             Status                   `json:"status"`
 	Version            uint64                   `json:"version"`
 	CreatedAt          time.Time                `json:"created_at"`
 	UpdatedAt          time.Time                `json:"updated_at"`
 	Steps              []Step                   `json:"steps"`
 	Messages           []Message                `json:"messages"`
+	Plan               *Plan                    `json:"plan,omitempty"`
 	PendingInteraction *interaction.Interaction `json:"pending_interaction,omitempty"`
 	PendingApproval    *Approval                `json:"pending_approval,omitempty"`
 	Result             *Result                  `json:"result,omitempty"`
@@ -81,12 +99,58 @@ type Snapshot struct {
 }
 
 type Store struct {
-	mu    sync.RWMutex
-	items map[string]*Snapshot
+	mu          sync.RWMutex
+	items       map[string]*Snapshot
+	persistence Persistence
+	persistErr  error
+}
+
+type Persistence interface {
+	LoadTaskSnapshots() ([][]byte, error)
+	SaveTaskSnapshot(id string, payload []byte) error
 }
 
 func NewStore() *Store {
 	return &Store{items: make(map[string]*Snapshot)}
+}
+
+// NewPersistentStore restores task snapshots. Work that was running or waiting
+// for approval cannot be resumed safely after a process restart, so it is
+// converted to waiting_input and requires an explicit user continuation.
+func NewPersistentStore(persistence Persistence) (*Store, error) {
+	store := &Store{items: make(map[string]*Snapshot), persistence: persistence}
+	if persistence == nil {
+		return store, nil
+	}
+	payloads, err := persistence.LoadTaskSnapshots()
+	if err != nil {
+		return nil, fmt.Errorf("task store: load snapshots: %w", err)
+	}
+	for _, payload := range payloads {
+		var item Snapshot
+		if err := json.Unmarshal(payload, &item); err != nil {
+			return nil, fmt.Errorf("task store: decode snapshot: %w", err)
+		}
+		if strings.TrimSpace(item.ID) == "" {
+			return nil, fmt.Errorf("task store: restored snapshot has empty id")
+		}
+		if item.Status == StatusRunning || item.Status == StatusWaitingApproval {
+			item.Status = StatusWaitingInput
+			item.PendingApproval = nil
+			item.Error = ""
+			item.Result = nil
+			item.Messages = append(item.Messages, newMessage("assistant", "Agent 已重启。此前执行或审批状态已失效；请确认后继续任务。"))
+			for i := range item.Steps {
+				if item.Steps[i].Status == "running" || item.Steps[i].Status == "waiting_approval" {
+					item.Steps[i].Status = "waiting_input"
+				}
+			}
+			touch(&item)
+		}
+		store.items[item.ID] = &item
+		store.persistLocked(&item)
+	}
+	return store, nil
 }
 
 func (s *Store) Create(input, parentTaskID string) Snapshot {
@@ -100,6 +164,7 @@ func (s *Store) Create(input, parentTaskID string) Snapshot {
 		ID:           id,
 		ParentTaskID: strings.TrimSpace(parentTaskID),
 		Title:        title,
+		Objective:    strings.TrimSpace(input),
 		Status:       StatusRunning,
 		Version:      1,
 		CreatedAt:    now,
@@ -109,6 +174,7 @@ func (s *Store) Create(input, parentTaskID string) Snapshot {
 	}
 	s.mu.Lock()
 	s.items[id] = item
+	s.persistLocked(item)
 	s.mu.Unlock()
 	return clone(*item)
 }
@@ -155,6 +221,7 @@ func (s *Store) PrepareInput(id, content string) (Snapshot, error) {
 		}
 	}
 	touch(item)
+	s.persistLocked(item)
 	return clone(*item), nil
 }
 
@@ -179,6 +246,21 @@ func (s *Store) UpdateStep(id string, step Step) {
 		item.Steps = append(item.Steps, step)
 	}
 	touch(item)
+	s.persistLocked(item)
+}
+
+func (s *Store) UpdatePlan(id string, plan Plan) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.items[id]
+	if !ok {
+		return
+	}
+	copyPlan := plan
+	copyPlan.Steps = append([]PlanStep(nil), plan.Steps...)
+	item.Plan = &copyPlan
+	touch(item)
+	s.persistLocked(item)
 }
 
 func (s *Store) RequireApproval(id string, approval Approval) error {
@@ -198,6 +280,7 @@ func (s *Store) RequireApproval(id string, approval Approval) error {
 		}
 	}
 	touch(item)
+	s.persistLocked(item)
 	return nil
 }
 
@@ -224,6 +307,7 @@ func (s *Store) ResolveApproval(id, approvalID, decision string) (Snapshot, erro
 		}
 	}
 	touch(item)
+	s.persistLocked(item)
 	return clone(*item), nil
 }
 
@@ -248,6 +332,31 @@ func (s *Store) Finish(id string, status Status, assistantMessages []string, for
 		item.Result = nil
 	}
 	touch(item)
+	s.persistLocked(item)
+}
+
+func (s *Store) PersistenceError() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	err := s.persistErr
+	s.mu.RUnlock()
+	return err
+}
+
+func (s *Store) persistLocked(item *Snapshot) {
+	if s == nil || s.persistence == nil || item == nil {
+		return
+	}
+	payload, err := json.Marshal(item)
+	if err == nil {
+		err = s.persistence.SaveTaskSnapshot(item.ID, payload)
+	}
+	if err != nil {
+		s.persistErr = err
+		log.Printf("task store: persist task=%s error=%v", item.ID, err)
+	}
 }
 
 func newMessage(role, content string) Message {
@@ -267,6 +376,11 @@ func clone(in Snapshot) Snapshot {
 		copyInteraction := *in.PendingInteraction
 		copyInteraction.Fields = append([]interaction.Field(nil), in.PendingInteraction.Fields...)
 		out.PendingInteraction = &copyInteraction
+	}
+	if in.Plan != nil {
+		copyPlan := *in.Plan
+		copyPlan.Steps = append([]PlanStep(nil), in.Plan.Steps...)
+		out.Plan = &copyPlan
 	}
 	if in.PendingApproval != nil {
 		copyApproval := *in.PendingApproval

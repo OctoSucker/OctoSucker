@@ -52,10 +52,12 @@ const (
 )
 
 type Action struct {
-	ID        string         `json:"id"`
-	Goal      string         `json:"goal"`
-	Tool      string         `json:"tool"`
-	Arguments map[string]any `json:"arguments,omitempty"`
+	ID              string         `json:"id"`
+	PlanStepID      string         `json:"plan_step_id"`
+	Goal            string         `json:"goal"`
+	SuccessCriteria string         `json:"success_criteria"`
+	Tool            string         `json:"tool"`
+	Arguments       map[string]any `json:"arguments,omitempty"`
 }
 
 func (a Action) Fingerprint() string {
@@ -105,11 +107,13 @@ const (
 )
 
 type Assessment struct {
-	Progress       Progress       `json:"progress"`
-	RoutingOutcome RoutingOutcome `json:"routing_outcome"`
-	RoutingReason  RoutingReason  `json:"routing_reason"`
-	Summary        string         `json:"summary"`
-	NextStepHint   string         `json:"next_step_hint,omitempty"`
+	Progress          Progress       `json:"progress"`
+	RoutingOutcome    RoutingOutcome `json:"routing_outcome"`
+	RoutingReason     RoutingReason  `json:"routing_reason"`
+	Summary           string         `json:"summary"`
+	Evidence          string         `json:"evidence,omitempty"`
+	CriteriaSatisfied bool           `json:"criteria_satisfied"`
+	NextStepHint      string         `json:"next_step_hint,omitempty"`
 }
 
 type Step struct {
@@ -132,6 +136,7 @@ type Turn struct {
 	Goal                string
 	ConversationContext []Message
 	ContextArtifacts    []toolcontract.ContextArtifact
+	Plan                *Plan
 	Steps               []*Step
 	Status              TurnStatus
 	TerminalReason      string
@@ -139,6 +144,7 @@ type Turn struct {
 	ConsecutiveFailures int
 	Trace               []string
 	OnStepChanged       func(*Step)
+	OnPlanChanged       func(*Plan)
 }
 
 func NewTurn(id, conversationID, goal string, context []Message, artifacts ...[]toolcontract.ContextArtifact) *Turn {
@@ -230,6 +236,7 @@ func (t *Turn) AppendStep(action Action, observation Observation) *Step {
 func (t *Turn) BeginStep(action Action) *Step {
 	step := &Step{Kind: "tool", Title: strings.TrimSpace(action.Goal), Action: action, Status: "running", StartedAt: time.Now().UTC()}
 	t.Steps = append(t.Steps, step)
+	t.markPlanStepRunning(action)
 	t.notifyStep(step)
 	return step
 }
@@ -278,6 +285,7 @@ func (t *Turn) CompleteStep(step *Step, err error) {
 	} else {
 		step.Status = "completed"
 	}
+	t.updatePlanStep(step.Action, step.Assessment, err)
 	t.notifyStep(step)
 }
 

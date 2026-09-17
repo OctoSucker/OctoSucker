@@ -7,7 +7,7 @@ import (
 	"github.com/OctoSucker/octosucker/internal/storage"
 )
 
-// adminHTTPHandler serves the admin shell and JSON APIs via [adminhttp.Handler].
+// adminHTTPHandler serves the admin JSON APIs via [adminhttp.Handler].
 func adminHTTPHandler(agent Agent) (http.Handler, error) {
 	return adminhttp.Handler(adminhttp.Options{
 		RunChat:               agent.RunTurn,

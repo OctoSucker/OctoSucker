@@ -127,14 +127,16 @@ func (d *DB) migrate() error {
 			FOREIGN KEY (from_id) REFERENCES %s(id),
 			FOREIGN KEY (to_id) REFERENCES %s(id)
 		)`, TableKnowledgeGraphEdges, TableKnowledgeGraphNodes, TableKnowledgeGraphNodes),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+			id TEXT NOT NULL PRIMARY KEY,
+			snapshot_json BLOB NOT NULL,
+			updated_at TEXT NOT NULL
+		)`, TableTaskSnapshots),
 	}
 	for _, q := range stmts {
 		if _, err := d.conn.Exec(q); err != nil {
 			return fmt.Errorf("store migrate: %w", err)
 		}
-	}
-	if _, err := d.conn.Exec(`DROP TABLE IF EXISTS tasks`); err != nil {
-		return fmt.Errorf("store migrate: drop tasks (in-memory task store only): %w", err)
 	}
 	if _, err := d.conn.Exec(`DROP TABLE IF EXISTS kg_node_aliases`); err != nil {
 		return fmt.Errorf("store migrate: drop legacy kg_node_aliases: %w", err)

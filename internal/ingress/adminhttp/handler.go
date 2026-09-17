@@ -7,24 +7,15 @@ import (
 
 	"github.com/OctoSucker/octosucker/internal/ingress/adminhttp/chat"
 	"github.com/OctoSucker/octosucker/internal/ingress/adminhttp/graph"
-	"github.com/OctoSucker/octosucker/internal/ingress/adminhttp/root"
 	"github.com/OctoSucker/octosucker/internal/ingress/adminhttp/tasks"
 )
 
-// Handler builds the admin mux. RunChat is required; IndexHTML defaults to the embedded shell; Graph is optional.
+// Handler builds the admin JSON API mux. RunChat is required; Graph is optional.
 func Handler(opts Options) (http.Handler, error) {
 	if opts.RunChat == nil {
 		return nil, fmt.Errorf("adminhttp: RunChat required")
 	}
-	index := opts.IndexHTML
-	if len(index) == 0 {
-		index = embeddedShellHTML
-	}
-	if len(index) == 0 {
-		return nil, fmt.Errorf("adminhttp: bundled shell missing")
-	}
 	mux := http.NewServeMux()
-	root.Register(mux, index)
 	chat.Register(mux, opts.RunChat, opts.PlanInteraction)
 	if opts.SubmitAssistantInput != nil && opts.SubmitTaskInteraction != nil && opts.SubmitTaskApproval != nil && opts.GetTask != nil {
 		tasks.Register(mux, opts.SubmitAssistantInput, opts.SubmitTaskInteraction, opts.SubmitTaskApproval, opts.GetTask)

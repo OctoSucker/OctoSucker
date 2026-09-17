@@ -41,7 +41,7 @@ type Runtime struct {
 	data          *storage.DB
 	tasks         *task.Store
 	ctx           context.Context
-	turnMu        sync.Mutex
+	turns         *turnGate
 	approvalMu    sync.Mutex
 	approvals     map[string]chan bool
 }
@@ -117,6 +117,10 @@ func NewRuntime(ctx context.Context, workspaceRoot string, cfg *config.Workspace
 	if err != nil {
 		return nil, closeAll(err)
 	}
+	taskStore, err := task.NewPersistentStore(data)
+	if err != nil {
+		return nil, closeAll(err)
+	}
 
 	return &Runtime{
 		loop:          loop,
@@ -124,9 +128,10 @@ func NewRuntime(ctx context.Context, workspaceRoot string, cfg *config.Workspace
 		conversations: conversation.NewStore(),
 		interactions:  interactionPlanner,
 		data:          data,
-		tasks:         task.NewStore(),
+		tasks:         taskStore,
 		ctx:           ctx,
 		approvals:     make(map[string]chan bool),
+		turns:         newTurnGate(defaultMaxConcurrentTurns),
 	}, nil
 }
 
@@ -161,10 +166,11 @@ func (r *Runtime) PlanInteraction(ctx context.Context, messages []string) (*inte
 
 // RunTurn executes one user request in the named in-memory conversation.
 func (r *Runtime) RunTurn(ctx context.Context, conversationID, text string) ([]string, error) {
-	if !r.turnMu.TryLock() {
+	release, ok := r.turns.tryAcquire("conversation:" + strings.TrimSpace(conversationID))
+	if !ok {
 		return []string{MsgBusy}, nil
 	}
-	defer r.turnMu.Unlock()
+	defer release()
 
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -268,17 +274,25 @@ func (r *Runtime) runTask(taskID, text string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !r.turnMu.TryLock() {
+	release, ok := r.turns.tryAcquire("task:" + strings.TrimSpace(taskID))
+	if !ok {
 		r.tasks.Finish(taskID, task.StatusFailed, []string{MsgBusy}, nil, "", MsgBusy)
 		return
 	}
-	defer r.turnMu.Unlock()
+	defer release()
 	ctx = execution.WithApprovalHandler(ctx, func(ctx context.Context, action model.Action, policy toolcontract.Policy) error {
 		approvalID := uuid.NewString()
 		waiter := make(chan bool, 1)
 		r.approvalMu.Lock()
 		r.approvals[approvalID] = waiter
 		r.approvalMu.Unlock()
+		defer func() {
+			r.approvalMu.Lock()
+			if current, ok := r.approvals[approvalID]; ok && current == waiter {
+				delete(r.approvals, approvalID)
+			}
+			r.approvalMu.Unlock()
+		}()
 		title := strings.TrimSpace(action.Goal)
 		if title == "" {
 			title = "执行高风险工具：" + action.Tool
@@ -301,15 +315,31 @@ func (r *Runtime) runTask(taskID, text string) {
 		}
 	})
 
+	taskSnapshot, ok := r.tasks.Get(taskID)
+	if !ok {
+		r.tasks.Finish(taskID, task.StatusFailed, []string{"任务状态不存在，无法继续执行。"}, nil, "", "task state not found")
+		return
+	}
+	conversationID := "task:" + taskID
+	goal := strings.TrimSpace(taskSnapshot.Objective)
+	if goal == "" {
+		goal = strings.TrimSpace(text)
+	}
+	if supplement := strings.TrimSpace(text); supplement != "" && supplement != goal {
+		goal += "\n\nUser supplemental input:\n" + supplement
+	}
 	turn := model.NewTurn(
 		uuid.NewString(),
-		"assistant",
-		text,
-		r.conversations.Context("assistant"),
-		r.conversations.ContextArtifacts("assistant"),
+		conversationID,
+		goal,
+		r.conversations.Context(conversationID),
+		r.conversations.ContextArtifacts(conversationID),
 	)
 	turn.OnStepChanged = func(step *model.Step) {
 		r.tasks.UpdateStep(taskID, taskStep(turn, step))
+	}
+	turn.OnPlanChanged = func(plan *model.Plan) {
+		r.tasks.UpdatePlan(taskID, taskPlan(plan))
 	}
 	if err := r.loop.Run(ctx, turn); err != nil {
 		log.Printf("runtime task: task=%s turn=%s error=%v", taskID, turn.ID, err)
@@ -318,8 +348,8 @@ func (r *Runtime) runTask(taskID, text string) {
 		return
 	}
 
-	r.conversations.RememberContextArtifacts("assistant", turn.ContextArtifactsSnapshot())
-	r.conversations.AppendExchange("assistant", text, turn.Answer)
+	r.conversations.RememberContextArtifacts(conversationID, turn.ContextArtifactsSnapshot())
+	r.conversations.AppendExchange(conversationID, text, turn.Answer)
 	messages, err := turn.UserFacingMessages()
 	if err != nil {
 		friendly := friendlyRunError(err)
@@ -380,6 +410,23 @@ func taskStep(turn *model.Turn, step *model.Step) task.Step {
 	}
 	if step.CompletedAt != nil && !step.StartedAt.IsZero() {
 		out.DurationMS = step.CompletedAt.Sub(step.StartedAt).Milliseconds()
+	}
+	return out
+}
+
+func taskPlan(plan *model.Plan) task.Plan {
+	if plan == nil {
+		return task.Plan{}
+	}
+	out := task.Plan{Objective: plan.Objective, Revision: plan.Revision, Steps: make([]task.PlanStep, 0, len(plan.Steps))}
+	for _, step := range plan.Steps {
+		out.Steps = append(out.Steps, task.PlanStep{
+			ID:              step.ID,
+			Goal:            step.Goal,
+			SuccessCriteria: step.SuccessCriteria,
+			Status:          string(step.Status),
+			Evidence:        step.Evidence,
+		})
 	}
 	return out
 }

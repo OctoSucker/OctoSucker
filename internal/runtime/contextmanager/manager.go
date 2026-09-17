@@ -90,6 +90,10 @@ func (m *Manager) Build(audience Audience, in Input) Snapshot {
 	conversation, omittedMessages := renderConversation(turn.ConversationContext, allocation.conversation)
 	active, omittedArtifacts := renderArtifacts(turn.ContextArtifacts, turn.Goal, allocation.active)
 	trajectory, omittedSteps := renderTrajectory(turn.Steps, allocation.trajectory)
+	if turn.Plan != nil {
+		planText := clipText(prettyJSON(turn.Plan), max(128, allocation.trajectory/3))
+		trajectory = strings.TrimSpace("CURRENT PLAN:\n" + planText + "\n\nEXECUTED STEPS:\n" + trajectory)
+	}
 	tools, omittedTools := renderRankedJSON(in.Tools, allocation.tools, func(tool toolcontract.ToolDescriptor) int {
 		return toolScore(tool, turn, in.RoutingHints)
 	})
@@ -272,7 +276,7 @@ func renderStep(index int, step *model.Step, outputBudget int) string {
 	result := step.Observation.Result
 	var b strings.Builder
 	fmt.Fprintf(&b, "--- Action %d ---\n", index+1)
-	fmt.Fprintf(&b, "Goal: %s\nTool: %s\nArguments: %s\n", step.Action.Goal, step.Action.Tool, args)
+	fmt.Fprintf(&b, "Goal: %s\nSuccess criteria: %s\nTool: %s\nArguments: %s\n", step.Action.Goal, step.Action.SuccessCriteria, step.Action.Tool, args)
 	fmt.Fprintf(&b, "Policy: risk=%s output_trust=%s capabilities=%v summary=%s\n",
 		step.Observation.Policy.Risk, step.Observation.Policy.OutputTrust, step.Observation.Policy.Capabilities, step.Observation.Policy.Summary)
 	fmt.Fprintf(&b, "Result: kind=%s count=%d empty=%v\n", result.Kind, result.Count, result.Empty)
@@ -282,9 +286,9 @@ func renderStep(index int, step *model.Step, outputBudget int) string {
 		fmt.Fprintf(&b, "Output:\n%s\n", clipText(text, outputBudget))
 	}
 	if step.Assessment.Progress != "" {
-		fmt.Fprintf(&b, "Assessment: progress=%s routing_outcome=%s routing_reason=%s summary=%s next=%s",
+		fmt.Fprintf(&b, "Assessment: progress=%s routing_outcome=%s routing_reason=%s summary=%s evidence=%s next=%s",
 			step.Assessment.Progress, step.Assessment.RoutingOutcome, step.Assessment.RoutingReason,
-			step.Assessment.Summary, step.Assessment.NextStepHint)
+			step.Assessment.Summary, step.Assessment.Evidence, step.Assessment.NextStepHint)
 	}
 	return strings.TrimSpace(b.String())
 }

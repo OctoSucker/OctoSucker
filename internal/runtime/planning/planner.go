@@ -37,16 +37,25 @@ func New(catalog ToolCatalog, llm JSONCompleter, advisor ToolAdvisor, contexts *
 }
 
 type decisionJSON struct {
-	Kind        string         `json:"kind"`
-	Disposition string         `json:"disposition"`
-	Goal        string         `json:"goal"`
-	Tool        string         `json:"tool"`
-	Arguments   map[string]any `json:"arguments"`
-	Reason      string         `json:"reason"`
-	Step        struct {
+	Kind            string         `json:"kind"`
+	Disposition     string         `json:"disposition"`
+	Goal            string         `json:"goal"`
+	SuccessCriteria string         `json:"success_criteria"`
+	CurrentStepID   string         `json:"current_step_id"`
+	Plan            []planStepJSON `json:"plan"`
+	Tool            string         `json:"tool"`
+	Arguments       map[string]any `json:"arguments"`
+	Reason          string         `json:"reason"`
+	Step            struct {
 		Title   string `json:"title"`
 		Summary string `json:"summary"`
 	} `json:"step"`
+}
+
+type planStepJSON struct {
+	ID              string `json:"id"`
+	Goal            string `json:"goal"`
+	SuccessCriteria string `json:"success_criteria"`
 }
 
 func (p *Planner) Decide(ctx context.Context, turn *model.Turn) (model.Decision, error) {
@@ -137,7 +146,33 @@ func (p *Planner) validateDecision(raw decisionJSON, turn *model.Turn, descripto
 		if goal == "" {
 			return model.Decision{}, fmt.Errorf("planner: act decision requires a concrete goal")
 		}
-		action := model.Action{ID: uuid.NewString(), Goal: goal, Tool: toolID, Arguments: args}
+		successCriteria := strings.TrimSpace(raw.SuccessCriteria)
+		if successCriteria == "" {
+			return model.Decision{}, fmt.Errorf("planner: act decision requires observable success_criteria")
+		}
+		currentStepID := strings.TrimSpace(raw.CurrentStepID)
+		if currentStepID == "" {
+			return model.Decision{}, fmt.Errorf("planner: act decision requires current_step_id")
+		}
+		plan := make([]model.PlanStep, 0, len(raw.Plan))
+		currentMatches := 0
+		for _, item := range raw.Plan {
+			step := model.PlanStep{ID: item.ID, Goal: item.Goal, SuccessCriteria: item.SuccessCriteria}
+			plan = append(plan, step)
+			if strings.TrimSpace(item.ID) == currentStepID {
+				currentMatches++
+				if strings.TrimSpace(item.Goal) != goal || strings.TrimSpace(item.SuccessCriteria) != successCriteria {
+					return model.Decision{}, fmt.Errorf("planner: current action must match plan step %q", currentStepID)
+				}
+			}
+		}
+		if currentMatches != 1 {
+			return model.Decision{}, fmt.Errorf("planner: current_step_id %q must identify exactly one plan step", currentStepID)
+		}
+		if turn.PlanStepCompleted(currentStepID) {
+			return model.Decision{}, fmt.Errorf("planner: completed plan step %q cannot be executed again", currentStepID)
+		}
+		action := model.Action{ID: uuid.NewString(), PlanStepID: currentStepID, Goal: goal, SuccessCriteria: successCriteria, Tool: toolID, Arguments: args}
 		if step.Title == "" {
 			step.Title = goal
 		}
@@ -147,6 +182,9 @@ func (p *Planner) validateDecision(raw decisionJSON, turn *model.Turn, descripto
 		if turn.HasFailedAction(action) {
 			encoded, _ := json.Marshal(args)
 			return model.Decision{}, fmt.Errorf("planner: exact failed action cannot be repeated: tool=%s arguments=%s", toolID, encoded)
+		}
+		if err := turn.RevisePlan(plan); err != nil {
+			return model.Decision{}, fmt.Errorf("planner: invalid plan: %w", err)
 		}
 		return model.Decision{Kind: model.DecisionAct, Action: action, Step: step, Reason: reason}, nil
 
